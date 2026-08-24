@@ -123,7 +123,7 @@ begin
     lower(new.email),
     coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
     case when admins is not null
-              and lower(new.email) = any(string_to_array(replace(admins, ' ', ''), ','))
+              and lower(new.email) = any(string_to_array(lower(replace(admins, ' ', '')), ','))
          then 'admin' else 'implementor' end
   );
   return new;

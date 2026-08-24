@@ -143,6 +143,12 @@ def main():
     templates = rest(conf, "GET", "task_templates?select=id,name")
     tpl_by_name = {t["name"]: t["id"] for t in templates}
 
+    missing_tpls = sorted({t for t in list(ONBOARDING_COLS.values()) + list(AUDIT_COLS.values())
+                           if t not in tpl_by_name})
+    if missing_tpls:
+        sys.exit(f"task_templates in Supabase is missing expected names: {missing_tpls} — "
+                 "re-run scripts/schema.sql or fix the column maps before importing.")
+
     report = {"imported": 0, "skipped_filter": 0, "cells_kept_as_notes": 0,
               "unmatched_implementors": set()}
 

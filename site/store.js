@@ -64,7 +64,7 @@ window.Store = (() => {
   async function getClient(id) {
     const { data, error } = await sb.from("clients")
       .select(`*, implementor:users(name), client_modules(*),
-               tasks(*, template:task_templates(phase,sort_order), assignee:users(name),
+               tasks(*, template:task_templates(phase,sort_order), assignee:users!tasks_assignee_id_fkey(name),
                      task_notes(note,created_at,author:users(name)))`)
       .eq("id", id).single();
     if (error) fail(error);
@@ -104,7 +104,7 @@ window.Store = (() => {
 
   function openItemsQuery() {
     return sb.from("tasks")
-      .select(`*, client:clients(dsp_name,short_code), assignee:users(name),
+      .select(`*, client:clients(dsp_name,short_code), assignee:users!tasks_assignee_id_fkey(name),
                task_notes(note,created_at,author:users(name))`)
       .not("assignee_id", "is", null);
   }
@@ -120,7 +120,7 @@ window.Store = (() => {
 
   async function listDoneItems(assigneeId) {
     let q = openItemsQuery().eq("status", "Done")
-      .order("done_date", { ascending: false }).limit(100);
+      .order("done_date", { ascending: false, nullsFirst: false }).limit(100);
     if (assigneeId) q = q.eq("assignee_id", assigneeId);
     const { data, error } = await q;
     if (error) fail(error);
