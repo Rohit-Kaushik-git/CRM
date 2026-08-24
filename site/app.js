@@ -77,6 +77,8 @@ function wireLogin() {
   const setMode = (m) => {
     mode = m;
     $("#f-name").style.display = m === "signup" ? "block" : "none";
+    $("#f-password2").style.display = m === "signup" ? "block" : "none";
+    $("#f-password2").required = m === "signup";
     $("#login-submit").textContent = m === "signup" ? "Sign up" : "Sign in";
     $("#tab-signin").classList.toggle("active", m === "signin");
     $("#tab-signup").classList.toggle("active", m === "signup");
@@ -88,6 +90,7 @@ function wireLogin() {
     guard(async () => {
       const email = $("#f-email").value, pw = $("#f-password").value;
       if (mode === "signup") {
+        if (pw !== $("#f-password2").value) { toast("Passwords don't match"); return; }
         await Store.signUp($("#f-name").value.trim(), email, pw);
         await Store.signIn(email, pw);
       } else {
