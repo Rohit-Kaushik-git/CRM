@@ -14,6 +14,7 @@ unmatched names are reported, never guessed (accounts only exist via sign-up).
 """
 import csv
 import json
+import re
 import os
 import sys
 import urllib.request
@@ -93,6 +94,11 @@ def rest(conf, method, path, body=None, prefer="return=representation"):
         sys.exit(f"{method} {path} failed: {e.code} {e.read().decode()[:500]}")
 
 
+def norm_header(text):
+    """Sheet headers can contain embedded newlines / doubled spaces — collapse to single spaces."""
+    return re.sub(r"\s+", " ", (text or "")).strip()
+
+
 def read_rows(filename, required_cols):
     path = os.path.join(ROOT, "data", "raw", filename)
     if not os.path.exists(path):
@@ -103,7 +109,7 @@ def read_rows(filename, required_cols):
         hi = next(i for i, r in enumerate(rows) if "DSP Name" in [c.strip() for c in r])
     except StopIteration:
         sys.exit(f"{filename}: no header row containing 'DSP Name' found.")
-    headers = [c.strip() for c in rows[hi]]
+    headers = [norm_header(c) for c in rows[hi]]
     missing = [c for c in required_cols if c not in headers]
     if missing:
         sys.exit(f"{filename}: expected columns missing: {missing}")
