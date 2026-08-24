@@ -111,7 +111,7 @@ the DSP Ops dashboard).
 - Parses cells like `Completed - 2/26 (Sanya)` → status Done, done_date 2026-02-26, and the
   raw cell text preserved as a task note. `TBD`, blanks → Open. Anything unparseable →
   status Open + verbatim note, so nothing is silently lost.
-- Maps Implementor names to `users` rows (creating them), vendor from "Current Payroll with".
+- Matches Implementor names to existing app users by first name (accounts exist only via sign-up, so unmatched names are reported for manual assignment, never auto-created); vendor from "Current Payroll with".
 - Re-runnable: upserts on (client, template).
 
 ## 6. Repo layout
