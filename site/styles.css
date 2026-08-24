@@ -13,11 +13,12 @@ button.secondary, .tabs button { background: #fff; color: var(--ink); }
 input, select { font: inherit; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
 .muted { color: var(--muted); }
 
-#login { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+#login, #reset { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
 .login-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
   padding: 28px; width: 340px; box-shadow: 0 4px 16px rgba(31,39,51,.08); }
 .login-card h1 { margin-bottom: 14px; }
 .login-card form { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+#reset-form { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
 .tabs { display: flex; gap: 6px; }
 .tabs button.active { border-color: var(--brand); color: var(--brand); font-weight: 600; }
 .hint { color: var(--muted); font-size: 12px; }

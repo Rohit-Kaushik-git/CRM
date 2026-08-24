@@ -58,6 +58,12 @@ async function renderRoute() {
 
 function showLogin() { $("#login").style.display = "flex"; $("#app").style.display = "none"; }
 
+function showReset() {
+  $("#login").style.display = "none";
+  $("#app").style.display = "none";
+  $("#reset").style.display = "flex";
+}
+
 function showApp(me) {
   $("#login").style.display = "none";
   $("#app").style.display = "flex";
@@ -93,12 +99,40 @@ function wireLogin() {
   };
 }
 
+function wireReset() {
+  $("#forgot").onclick = (e) => {
+    e.preventDefault();
+    guard(async () => {
+      const email = $("#f-email").value.trim() || prompt("Your @uzio.com email:");
+      if (!email) return;
+      await Store.resetPassword(email);
+      toast("Reset link sent — check your inbox", true);
+    });
+  };
+  $("#reset-form").onsubmit = (e) => {
+    e.preventDefault();
+    guard(async () => {
+      const p1 = $("#r-password").value, p2 = $("#r-password2").value;
+      if (p1 !== p2) { toast("Passwords don't match"); return; }
+      await Store.updatePassword(p1);
+      toast("Password updated", true);
+      location.hash = "";
+      const me = await Store.loadMe();
+      $("#reset").style.display = "none";
+      me ? showApp(me) : showLogin();
+    });
+  };
+}
+
 window.addEventListener("hashchange", renderRoute);
 window.addEventListener("DOMContentLoaded", async () => {
   wireLogin();
+  wireReset();
   $("#signout").onclick = () => guard(async () => {
     await Store.signOut(); location.hash = ""; showLogin();
   });
+  Store.onPasswordRecovery(() => showReset());
+  if (location.hash.includes("type=recovery")) { showReset(); return; }
   const me = await (Store.loadMe().catch((e) => { toast(e.message); return null; }));
   me ? showApp(me) : showLogin();
 });

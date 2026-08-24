@@ -12,6 +12,7 @@ Internal tracker for the Uzio implementation team. Spec: `docs/specs/2026-08-24-
 - All UI errors surface via `toast()`; async handlers wrap in `guard()`.
 - Roles: admin / implementor. Role rules live in RLS (`scripts/rls.sql`), UI only mirrors them.
 - Secrets in `.env` (gitignored). Anon key in `site/config.js` is public by design.
+- Password reset: "Forgot password?" on the login card → Supabase recovery email → the emailed link returns to the app, which shows the set-new-password card. Requires the app's URL to be in Supabase → Authentication → URL Configuration (Site URL / Redirect URLs); links cannot work from file://.
 
 ## Deploy
 Push to `main` → Vercel auto-deploys `site/`. Schema changes: paste the changed SQL into the Supabase SQL editor by hand.

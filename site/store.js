@@ -31,6 +31,23 @@ window.Store = (() => {
 
   const getMe = () => me;
 
+  async function resetPassword(email) {
+    if (!/@uzio\.com$/i.test(email.trim())) throw new Error("Enter your @uzio.com email first");
+    const { error } = await sb.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: window.location.origin + window.location.pathname,
+    });
+    if (error) fail(error);
+  }
+
+  async function updatePassword(password) {
+    const { error } = await sb.auth.updateUser({ password });
+    if (error) fail(error);
+  }
+
+  function onPasswordRecovery(cb) {
+    sb.auth.onAuthStateChange((event) => { if (event === "PASSWORD_RECOVERY") cb(); });
+  }
+
   async function listUsers() {
     const { data, error } = await sb.from("users").select("*").order("name");
     if (error) fail(error);
@@ -127,7 +144,7 @@ window.Store = (() => {
     return data;
   }
 
-  return { signUp, signIn, signOut, loadMe, getMe, listUsers, updateUser,
+  return { signUp, signIn, signOut, loadMe, getMe, resetPassword, updatePassword, onPasswordRecovery, listUsers, updateUser,
            getAdminEmails, setAdminEmails, listClients, getClient, createClient,
            updateClient, updateModule, createTask, updateTask, addNote,
            listOpenItems, listDoneItems };
