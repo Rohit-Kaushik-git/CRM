@@ -90,24 +90,12 @@ insert into task_templates (name, phase, sort_order) values
   ('Prior Pay Info Transfer & Approval','onboarding',10),
   ('PTO Balance Move','onboarding',11),
   ('Tax Review (Post Prior Upload)','onboarding',12),
-  ('Credentials','audit',1),
-  ('Qualified Overtime Report','audit',2),
-  ('Census','audit',3),
-  ('Census Delta','audit',4),
-  ('Emergency Contact','audit',5),
-  ('License Details','audit',6),
-  ('Payment Method','audit',7),
-  ('PTO Policy Creation','audit',8),
-  ('PTO Balance','audit',9),
-  ('SIT/FIT Withholding','audit',10),
-  ('Earnings','audit',11),
-  ('Deductions','audit',12),
-  ('Contributions Transfer (Except Roth/401k)','audit',13),
-  ('Workers Comp','audit',14),
-  ('Doc Transfer','audit',15),
-  ('Prior Comp Transfer & Approval','audit',16),
-  ('Client Data Audit','audit',17),
-  ('Historical Data Downloaded','audit',18);
+  ('Census Audit','audit',1),
+  ('Withholding Audit','audit',2),
+  ('Payment Audit','audit',3),
+  ('Prior Payroll Audit','audit',4),
+  ('Deduction Audit','audit',5),
+  ('Emergency Contact Audit','audit',6);
 
 -- Sign-up hook: reject non-uzio emails, mirror into public.users, role from admin list.
 create or replace function public.handle_new_user()

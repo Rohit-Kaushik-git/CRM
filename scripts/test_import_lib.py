@@ -1,6 +1,6 @@
 import unittest
 from datetime import date
-from import_lib import parse_date, parse_status_cell, include_client
+from import_lib import parse_date, parse_status_cell, parse_audit_cell, include_client
 
 
 class TestParseDate(unittest.TestCase):
@@ -73,6 +73,31 @@ class TestParseStatusCell(unittest.TestCase):
         status, done, note = parse_status_cell("https://jira.uzio.com/browse/PHIX-96116")
         self.assertEqual(status, "Open")
         self.assertEqual(note, "https://jira.uzio.com/browse/PHIX-96116")
+
+
+class TestParseAuditCell(unittest.TestCase):
+    def test_present_is_done(self):
+        self.assertEqual(parse_audit_cell("Present"), ("Done", None, None))
+
+    def test_missing_is_open(self):
+        self.assertEqual(parse_audit_cell("Missing"), ("Open", None, None))
+
+    def test_case_insensitive(self):
+        self.assertEqual(parse_audit_cell("present")[0], "Done")
+        self.assertEqual(parse_audit_cell("MISSING")[0], "Open")
+
+    def test_present_with_detail_keeps_note(self):
+        status, done, note = parse_audit_cell("Present (2 files)")
+        self.assertEqual(status, "Done")
+        self.assertEqual(note, "Present (2 files)")
+
+    def test_blank_is_open(self):
+        self.assertEqual(parse_audit_cell(""), ("Open", None, None))
+
+    def test_fallback_to_status_cell(self):
+        status, done, note = parse_audit_cell("Completed -2/26 (Sanya)")
+        self.assertEqual(status, "Done")
+        self.assertEqual(done, date(2026, 2, 26))
 
 
 class TestIncludeClient(unittest.TestCase):

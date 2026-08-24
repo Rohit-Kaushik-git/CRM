@@ -66,11 +66,9 @@ Rules:
 - Task templates seed data comes from the sheets' columns: onboarding checklist from the
   Onboarding Tracker (Company Setup, Federal/State Withholding, Delta Data Upload, TT Setup,
   Audit Client Data, Final Payroll Review, Prior Pay Transfer, PTO Balance Move, Tax Review, …)
-  and audit checklist from the Audit Tracker (Census, Census Delta, Emergency Contact,
-  License Details, Payment Method, PTO Policy, PTO Balance, SIT/FIT Withholding, Earnings,
-  Deductions, Contributions Transfer, Workers Comp, Doc Transfer, Prior Comp Transfer,
-  Client Data Audit, Historical Data Downloaded). Exact list finalized during implementation
-  from the live sheet headers.
+  and audit checklist from the Audit File Status tab of the Data Migration Tracker (Census Audit,
+  Withholding Audit, Payment Audit, Prior Payroll Audit, Deduction Audit, Emergency Contact
+  Audit — Present/Missing per client, with folder coverage and last-checked kept as notes).
 
 ### Security (phase 1)
 - The page ships only the **anon key**; all reads and writes require an authenticated
@@ -111,7 +109,7 @@ the DSP Ops dashboard).
 - Parses cells like `Completed - 2/26 (Sanya)` → status Done, done_date 2026-02-26, and the
   raw cell text preserved as a task note. `TBD`, blanks → Open. Anything unparseable →
   status Open + verbatim note, so nothing is silently lost.
-- Matches Implementor names to existing app users by first name (accounts exist only via sign-up, so unmatched names are reported for manual assignment, never auto-created); vendor from "Current Payroll with".
+- Matches Implementor names to existing app users by first name (accounts exist only via sign-up, so unmatched names are reported for manual assignment, never auto-created); vendor from the onboarding sheet's "Previous System".
 - Re-runnable: upserts on (client, template).
 
 ## 6. Repo layout

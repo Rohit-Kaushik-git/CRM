@@ -44,6 +44,20 @@ def parse_status_cell(text):
     return ("Open", None, raw)
 
 
+def parse_audit_cell(text):
+    """Audit File Status cells: Present -> Done, Missing -> Open; other text falls
+    back to parse_status_cell. Extra text beyond the keyword is kept as the note."""
+    raw = (text or "").strip()
+    if not raw:
+        return ("Open", None, None)
+    low = raw.lower()
+    if low.startswith("present"):
+        return ("Done", None, None if low == "present" else raw)
+    if low.startswith("missing"):
+        return ("Open", None, None if low == "missing" else raw)
+    return parse_status_cell(raw)
+
+
 def include_client(actual_tt, expected_tt, cutoff=date(2026, 7, 31)):
     """Import filter: TT live date (actual wins over expected) strictly after the cutoff."""
     d = actual_tt or expected_tt

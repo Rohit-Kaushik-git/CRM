@@ -2,7 +2,7 @@
 
 Inputs (CSV exports placed in data/raw/ — gitignored):
   data/raw/onboarding.csv   DSP Implementation tab of the Onboarding Tracker
-  data/raw/audit.csv        main tab of the Audit Tracker
+  data/raw/audit.csv        Audit File Status tab of the Data Migration Tracker
 
 Usage:
   python scripts/import_sheets.py --dry-run   # print what would change, write nothing
@@ -20,7 +20,7 @@ import sys
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from import_lib import parse_date, parse_status_cell, include_client
+from import_lib import parse_date, parse_status_cell, parse_audit_cell, include_client
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -41,24 +41,12 @@ ONBOARDING_COLS = {
     "Tax Review (Post Prior Upload)": "Tax Review (Post Prior Upload)",
 }
 AUDIT_COLS = {
-    "Credentials": "Credentials",
-    "Downloaded Qualified Overtime Report": "Qualified Overtime Report",
-    "Census": "Census",
-    "Census Delta": "Census Delta",
-    "Emergency Contact": "Emergency Contact",
-    "License Details": "License Details",
-    "Payment Method": "Payment Method",
-    "PTO Policy Creation": "PTO Policy Creation",
-    "PTO Balance": "PTO Balance",
-    "SIT/FIT Withholding": "SIT/FIT Withholding",
-    "Earnings": "Earnings",
-    "Deductions": "Deductions",
-    "Contributions Transfer (Except Roth/401k)": "Contributions Transfer (Except Roth/401k)",
-    "Workers Comp": "Workers Comp",
-    "Doc Transfer": "Doc Transfer",
-    "Prior Comp Transfer and Approval": "Prior Comp Transfer & Approval",
-    "Client Data Audit": "Client Data Audit",
-    "Historical Data Dowloaded": "Historical Data Downloaded",  # sheet's own typo
+    "Census Audit": "Census Audit",
+    "Withholding Audit": "Withholding Audit",
+    "Payment Audit": "Payment Audit",
+    "Prior Payroll Audit": "Prior Payroll Audit",
+    "Deduction Audit": "Deduction Audit",
+    "Emergency Contact Audit": "Emergency Contact Audit",
 }
 
 
@@ -99,16 +87,16 @@ def norm_header(text):
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 
-def read_rows(filename, required_cols):
+def read_rows(filename, required_cols, key_col="DSP Name"):
     path = os.path.join(ROOT, "data", "raw", filename)
     if not os.path.exists(path):
         sys.exit(f"Missing {path} — export the sheet tab as CSV and place it there.")
     with open(path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
     try:
-        hi = next(i for i, r in enumerate(rows) if "DSP Name" in [c.strip() for c in r])
+        hi = next(i for i, r in enumerate(rows) if key_col in [c.strip() for c in r])
     except StopIteration:
-        sys.exit(f"{filename}: no header row containing 'DSP Name' found.")
+        sys.exit(f"{filename}: no header row containing '{key_col}' found.")
     headers = [norm_header(c) for c in rows[hi]]
     missing = [c for c in required_cols if c not in headers]
     if missing:
@@ -116,7 +104,7 @@ def read_rows(filename, required_cols):
     out = []
     for r in rows[hi + 1:]:
         d = {headers[i]: (r[i].strip() if i < len(r) else "") for i in range(len(headers))}
-        if d.get("DSP Name"):
+        if d.get(key_col):
             out.append(d)
     return out
 
@@ -141,8 +129,8 @@ def main():
     conf = load_env()
     onboarding = read_rows("onboarding.csv",
                            ["DSP Name", "Expected Time Tracking Live Date", "Implementor"])
-    audit = read_rows("audit.csv", ["DSP Name", "Current Payroll with"])
-    audit_by_name = {r["DSP Name"].upper(): r for r in audit}
+    audit = read_rows("audit.csv", ["Client", "Census Audit", "Last Checked"], key_col="Client")
+    audit_by_name = {r["Client"].upper(): r for r in audit}
 
     users = rest(conf, "GET", "users?select=id,name")
     user_by_first = {u["name"].split()[0].lower(): u["id"] for u in users if u.get("name")}
@@ -171,11 +159,11 @@ def main():
         if imp_name and not imp_id:
             report["unmatched_implementors"].add(imp_name)
 
-        payroll_with = arow.get("Current Payroll with", "").lower()
+        prev_system = row.get("Previous System", "").lower()
         client = {
             "dsp_name": row["DSP Name"],
             "short_code": row.get("DSP Short Code", ""),
-            "vendor": "ADP" if "adp" in payroll_with else ("Paycom" if "paycom" in payroll_with else None),
+            "vendor": "ADP" if "adp" in prev_system else ("Paycom" if "paycom" in prev_system else None),
             "previous_system": row.get("Previous System") or None,
             "implementor_id": imp_id,
             "status": client_status(row.get("Final Status", "")),
@@ -183,6 +171,8 @@ def main():
             "payroll_cutoff_date": iso(parse_date(row.get("Payroll Cut off Date", ""))),
             "first_pay_date": iso(parse_date(row.get("Payroll Live(Pay) Date", ""))),
             "rag": row.get("RAG", "").strip()[:1].upper() or None,
+            "notes": (f"Audit folder coverage: {arow.get('Coverage')} (last checked {arow.get('Last Checked')})"
+                      if arow.get("Coverage") else None),
         }
         if client["rag"] not in ("R", "A", "G"):
             client["rag"] = None
@@ -204,6 +194,7 @@ def main():
             rest(conf, "DELETE", f"task_notes?task_id=eq.{tid}&note=like.%5Bimport%5D*",
                  prefer="return=minimal")
 
+        last_checked = parse_date(arow.get("Last Checked", ""))
         for cols, src in ((ONBOARDING_COLS, row), (AUDIT_COLS, arow)):
             for col, tpl_name in cols.items():
                 if col not in src:
@@ -211,7 +202,12 @@ def main():
                 cell = src.get(col, "")
                 if not cell and col.startswith("Data Transfer ("):
                     continue  # only one vendor's column is filled; skip the empty twin
-                status, done, note = parse_status_cell(cell)
+                if cols is AUDIT_COLS:
+                    status, done, note = parse_audit_cell(cell)
+                    if status == "Done" and done is None:
+                        done = last_checked
+                else:
+                    status, done, note = parse_status_cell(cell)
                 tid = task_by_tpl.get(tpl_by_name[tpl_name])
                 if not tid:
                     continue
