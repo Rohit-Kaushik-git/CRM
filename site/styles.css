@@ -63,6 +63,10 @@ tr.rowlink { cursor: pointer; } tr.rowlink:hover { background: #f6f9fd; }
   color: #fff; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: 340px; }
 #toast.show { opacity: 1; }
 #toast.err { background: var(--bad); } #toast.ok { background: var(--ok); }
+#toast.show { pointer-events: auto; }
+#toast #toast-undo { margin-left: 12px; padding: 2px 10px; font-size: 12px;
+  background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.5);
+  color: #fff; border-radius: 5px; cursor: pointer; }
 
 @media (max-width: 760px) {
   #app { flex-direction: column; }

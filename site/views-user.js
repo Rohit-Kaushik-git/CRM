@@ -34,23 +34,35 @@ Views.renderMyItems = async (view) => {
 
   view.querySelectorAll("tr[data-task]").forEach((r) => {
     const tid = Number(r.dataset.task);
+    const item = items.find((x) => x.id === tid);
+    const rerender = () => Views.renderMyItems(view);
     const start = r.querySelector(".t-start");
     if (start) start.onclick = () => guard(async () => {
       await Store.updateTask(tid, { status: "In Progress" });
-      Views.renderMyItems(view);
+      toastUndo(`${item.title} → In Progress`, async () => {
+        await Store.updateTask(tid, { status: "Open" });
+        toast("Undone", true);
+        rerender();
+      });
+      rerender();
     });
     r.querySelector(".t-done").onclick = () => guard(async () => {
       const note = prompt("Completion note (required):");
       if (note === null) return;
       if (!note.trim()) { toast("A note is required to mark Done"); return; }
+      const prevStatus = item.status;
       await Store.addNote(tid, note.trim());
       await Store.updateTask(tid, { status: "Done", done_date: new Date().toISOString().slice(0, 10) });
-      toast("Marked done", true);
-      Views.renderMyItems(view);
+      toastUndo(`${item.title} → Done`, async () => {
+        await Store.updateTask(tid, { status: prevStatus, done_date: null });
+        toast("Undone — note kept in history", true);
+        rerender();
+      });
+      rerender();
     });
     r.querySelector(".t-addnote").onclick = () => guard(async () => {
       const note = prompt("Note:");
-      if (note && note.trim()) { await Store.addNote(tid, note.trim()); Views.renderMyItems(view); }
+      if (note && note.trim()) { await Store.addNote(tid, note.trim()); toast("Note added", true); rerender(); }
     });
   });
 };

@@ -6,14 +6,47 @@ function esc(v) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function fmtDate(d) { return d || "—"; }
+let toastTimer = null;
 function toast(msg, ok = false) {
   const t = $("#toast");
   t.textContent = msg;
   t.className = (ok ? "ok" : "err") + " show";
-  setTimeout(() => (t.className = ""), 3500);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.className = ""), 3500);
+}
+function toastUndo(msg, undoFn) {
+  const t = $("#toast");
+  t.textContent = "";
+  const span = document.createElement("span");
+  span.textContent = msg;
+  t.appendChild(span);
+  const btn = document.createElement("button");
+  btn.id = "toast-undo";
+  btn.type = "button";
+  btn.textContent = "Undo";
+  btn.onclick = () => {
+    clearTimeout(toastTimer);
+    t.className = "";
+    guard(undoFn);
+  };
+  t.appendChild(btn);
+  t.className = "ok show";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.className = ""), 5000);
 }
 async function guard(fn) { // wrap async UI actions: surface failures as toasts
   try { return await fn(); } catch (e) { toast(e.message); }
+}
+async function saveChange(msg, doFn, undoFn, refresh) {
+  await guard(async () => {
+    await doFn();
+    if (undoFn) {
+      toastUndo(msg, async () => { await undoFn(); toast("Undone", true); refresh(); });
+    } else {
+      toast(msg, true);
+    }
+    refresh();
+  });
 }
 function latestNote(t) {
   const notes = (t.task_notes || []).slice().sort((a, b) => b.created_at.localeCompare(a.created_at));

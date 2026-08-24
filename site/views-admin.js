@@ -54,6 +54,7 @@ Views.renderClients = async (view) => {
       vendor: $("#nc-vendor").value || null,
       tt_live_date: $("#nc-tt").value || null,
     });
+    toast("Client created", true);
     location.hash = `#client/${c.id}`;
   });
   wireClientRows(view);
@@ -148,27 +149,49 @@ Views.renderClientDetail = async (view, id) => {
       const tid = Number(row.dataset.task);
       const t = c.tasks.find((x) => x.id === tid);
       const asg = row.querySelector(".t-assignee");
-      if (!asg.disabled) asg.onchange = () =>
-        guard(() => Store.updateTask(tid, { assignee_id: asg.value || null }));
+      if (!asg.disabled) asg.onchange = () => {
+        const prev = t.assignee_id;
+        const who = asg.options[asg.selectedIndex].text;
+        saveChange(`${t.title} → ${asg.value ? "assigned to " + who : "unassigned"}`,
+          () => Store.updateTask(tid, { assignee_id: asg.value || null }),
+          () => Store.updateTask(tid, { assignee_id: prev }),
+          reload);
+      };
       const due = row.querySelector(".t-due");
-      if (!due.disabled) due.onchange = () =>
-        guard(() => Store.updateTask(tid, { due_date: due.value || null }));
+      if (!due.disabled) due.onchange = () => {
+        const prev = t.due_date;
+        saveChange(`${t.title} → due ${due.value || "—"}`,
+          () => Store.updateTask(tid, { due_date: due.value || null }),
+          () => Store.updateTask(tid, { due_date: prev }),
+          reload);
+      };
       const st = row.querySelector(".t-status");
       if (!st.disabled) st.onchange = () => guard(async () => {
+        const prevStatus = t.status, prevDone = t.done_date;
         if (st.value === "Done") {
           const note = prompt("Completion note (required):");
           if (note === null || !note.trim()) { st.value = t.status; toast("A note is required to mark Done"); return; }
           await Store.addNote(tid, note.trim());
           await Store.updateTask(tid, { status: "Done", done_date: new Date().toISOString().slice(0, 10) });
+          toastUndo(`${t.title} → Done`, async () => {
+            await Store.updateTask(tid, { status: prevStatus, done_date: prevDone });
+            toast("Undone — note kept in history", true);
+            reload();
+          });
         } else {
           await Store.updateTask(tid, { status: st.value, done_date: null });
+          toastUndo(`${t.title} → ${st.value}`, async () => {
+            await Store.updateTask(tid, { status: prevStatus, done_date: prevDone });
+            toast("Undone", true);
+            reload();
+          });
         }
         reload();
       });
       const nb = row.querySelector(".t-note");
       if (nb) nb.onclick = () => guard(async () => {
         const note = prompt("Note:");
-        if (note && note.trim()) { await Store.addNote(tid, note.trim()); reload(); }
+        if (note && note.trim()) { await Store.addNote(tid, note.trim()); toast("Note added", true); reload(); }
       });
     });
   };
@@ -177,9 +200,20 @@ Views.renderClientDetail = async (view, id) => {
   renderTasks("onboarding");
 
   if (isAdmin) {
+    const FIELD_LABELS = {
+      status: "Status", rag: "RAG", vendor: "Vendor", implementor_id: "Implementor",
+      tt_live_date: "TT live", payroll_cutoff_date: "Payroll cutoff", first_pay_date: "First pay",
+    };
     const bind = (sel, field) => {
       const el = $(sel);
-      el.onchange = () => guard(() => Store.updateClient(id, { [field]: el.value || null }));
+      el.onchange = () => {
+        const prev = c[field];
+        const shown = el.tagName === "SELECT" ? el.options[el.selectedIndex].text : (el.value || "—");
+        saveChange(`${FIELD_LABELS[field]} → ${shown}`,
+          () => Store.updateClient(id, { [field]: el.value || null }),
+          () => Store.updateClient(id, { [field]: prev }),
+          reload);
+      };
     };
     bind("#c-status", "status"); bind("#c-rag", "rag"); bind("#c-vendor", "vendor");
     bind("#c-imp", "implementor_id"); bind("#c-tt", "tt_live_date");
@@ -187,12 +221,20 @@ Views.renderClientDetail = async (view, id) => {
 
     view.querySelectorAll("tr[data-mod]").forEach((row) => {
       const mid = Number(row.dataset.mod);
-      row.querySelector(".m-opted").onchange = (e) =>
-        guard(() => Store.updateModule(mid, { opted: e.target.checked }));
-      row.querySelector(".m-training").onchange = (e) =>
-        guard(() => Store.updateModule(mid, { training_done: e.target.checked }));
-      row.querySelector(".m-date").onchange = (e) =>
-        guard(() => Store.updateModule(mid, { training_date: e.target.value || null }));
+      const m = c.client_modules.find((x) => x.id === mid);
+      const wire = (cls, field, label, isCheckbox) => {
+        row.querySelector(cls).onchange = (e) => {
+          const prev = m[field];
+          const val = isCheckbox ? e.target.checked : (e.target.value || null);
+          saveChange(`${m.module}: ${label} → ${isCheckbox ? (val ? "yes" : "no") : (val || "—")}`,
+            () => Store.updateModule(mid, { [field]: val }),
+            () => Store.updateModule(mid, { [field]: prev }),
+            reload);
+        };
+      };
+      wire(".m-opted", "opted", "opted", true);
+      wire(".m-training", "training_done", "training done", true);
+      wire(".m-date", "training_date", "training date", false);
     });
 
     $("#adhoc-add").onclick = () => guard(async () => {
@@ -203,6 +245,7 @@ Views.renderClientDetail = async (view, id) => {
         assignee_id: $("#adhoc-assignee").value || null,
         due_date: $("#adhoc-due").value || null,
       });
+      toast("Task added", true);
       reload();
     });
   }
@@ -253,10 +296,22 @@ Views.renderTeam = async (view) => {
     </tr>`).join("")}</tbody></table>`;
   view.querySelectorAll("tbody tr").forEach((row) => {
     const uid = row.dataset.id, email = row.dataset.email;
-    row.querySelector(".u-name").onchange = (e) =>
-      guard(() => Store.updateUser(uid, { name: e.target.value.trim() }));
-    row.querySelector(".u-active").onchange = (e) =>
-      guard(() => Store.updateUser(uid, { active: e.target.checked }));
+    const u = users.find((x) => x.id === uid);
+    const rerender = () => Views.renderTeam(view);
+    row.querySelector(".u-name").onchange = (e) => {
+      const prev = u.name;
+      saveChange(`Name → ${e.target.value.trim()}`,
+        () => Store.updateUser(uid, { name: e.target.value.trim() }),
+        () => Store.updateUser(uid, { name: prev }),
+        rerender);
+    };
+    row.querySelector(".u-active").onchange = (e) => {
+      const prev = u.active;
+      saveChange(`${u.name} → ${e.target.checked ? "active" : "deactivated"}`,
+        () => Store.updateUser(uid, { active: e.target.checked }),
+        () => Store.updateUser(uid, { active: prev }),
+        rerender);
+    };
     row.querySelector(".u-role").onclick = () => guard(async () => {
       const makeAdmin = !adminEmails.includes(email.toLowerCase());
       const next = makeAdmin
@@ -265,8 +320,13 @@ Views.renderTeam = async (view) => {
       if (!next.length) { toast("At least one admin must remain"); return; }
       await Store.setAdminEmails(next);
       await Store.updateUser(uid, { role: makeAdmin ? "admin" : "implementor" });
-      toast("Role updated", true);
-      Views.renderTeam(view);
+      toastUndo(`${u.name} → ${makeAdmin ? "admin" : "implementor"}`, async () => {
+        await Store.setAdminEmails(adminEmails);
+        await Store.updateUser(uid, { role: u.role });
+        toast("Undone", true);
+        rerender();
+      });
+      rerender();
     });
   });
 };
