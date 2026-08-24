@@ -28,17 +28,24 @@ tracking should be easy and very user friendly."* YAGNI applies everywhere.
 | Hosting  | Vercel (auto-deploy on push to `main`) | Free; `vercel.json` static config |
 | Import   | Python (stdlib only) one-time script | Same style as Data_Tracker scripts |
 
-**Auth (phase 1):** no real login — a name-picker dropdown of team members, choice stored in
-`localStorage`. Role (admin/implementor) comes from the picked user's DB record.
-**Auth (future):** Supabase Auth with Google sign-in restricted to `@uzio.com`; the picker is
-replaced, everything else (role checks, screens, queries) is unchanged. Structure the app so
-"current user" is resolved in exactly one place.
+**Auth (phase 1):** Supabase Auth **email + password**. Sign-up/sign-in restricted to
+`@uzio.com` addresses (enforced in the app and in the DB trigger that creates the `users`
+row). Role assignment: emails on the **admin list** get `admin`, everyone else gets
+`implementor`. The admin list is data, not code — a single row in an `app_config` table
+(initially just `rohit.kaushik@uzio.com`), editable later from the Team view without a
+deploy. Password resets via Supabase's built-in email flow.
+**Auth (future):** switch the same Supabase Auth setup to Google sign-in restricted to
+`@uzio.com`; accounts, roles, and data are unchanged — only the sign-in method swaps.
+Structure the app so "current user" is resolved in exactly one place.
 
 ## 3. Data model (Postgres / Supabase)
 
 ```
-users           id, name, email (nullable now; used for future Google sign-in),
+app_config      key, value                       -- e.g. key='admin_emails', value='rohit.kaushik@uzio.com'
+users           id (= auth.users id), name, email (unique, @uzio.com),
                 role ('admin'|'implementor'), active bool
+                -- row auto-created by a trigger on Supabase auth sign-up;
+                -- role = 'admin' if email is in app_config.admin_emails
 clients         id, dsp_name, short_code, vendor ('ADP'|'Paycom'), previous_system,
                 implementor_id -> users, status ('Not Started'|'In Progress'|'Live'|'Completed'),
                 tt_live_date, payroll_cutoff_date, first_pay_date, rag ('R'|'A'|'G'), notes
@@ -65,11 +72,14 @@ Rules:
   Client Data Audit, Historical Data Downloaded). Exact list finalized during implementation
   from the live sheet headers.
 
-### Security (phase 1, pragmatic)
-- Supabase anon key in the page; RLS: `select` open to anon, writes allowed to anon for now
-  (trusted internal team, private URL). When Google sign-in lands, writes tighten to
-  authenticated users and role checks move server-side. This trade-off is accepted for the
-  test phase and documented here deliberately.
+### Security (phase 1)
+- The page ships only the **anon key**; all reads and writes require an authenticated
+  session (RLS: `authenticated` role only — anon gets nothing).
+- Role enforcement is server-side via RLS, not just UI: implementors may update
+  status/notes on tasks where they are the assignee; admins may do everything
+  (checked against the `users.role` of the JWT's user id).
+- Sign-ups from non-`@uzio.com` emails are rejected by the sign-up trigger.
+- The service key stays in local `.env` (gitignored) and is used only by import scripts.
 
 ## 4. Screens
 
@@ -82,7 +92,9 @@ the DSP Ops dashboard).
    (implementor + due date); status toggle; module/training toggles; add ad-hoc task; notes.
 2. **Open Items** — all assigned & not-done tasks across clients, grouped by implementor,
    sortable by due date / client. Done items visible in an expandable history with latest note.
-3. **Team** — add/edit users, set role, deactivate.
+3. **Team** — see registered users, edit name, promote/demote admin (writes to the
+   `app_config` admin list), deactivate. Accounts are created by each user signing up
+   with their `@uzio.com` email; admin does not manage passwords.
 
 ### User (implementor) screen
 1. **My Open Items** — tasks assigned to me, grouped by client; actions: mark In Progress,
@@ -121,7 +133,10 @@ CRM/
   ("Save failed — retry"), never silent console-only errors; optimistic UI updates roll back.
 - Import script prints a per-row report (imported / skipped-by-filter / unparsed-cell count)
   and exits non-zero on structural surprises (missing expected columns).
-- Manual test checklist per release (it's a 2-screen internal tool): create client →
+- Manual test checklist per release (it's a 2-screen internal tool): sign-up with
+  non-@uzio.com email rejected; rohit.kaushik@uzio.com lands on Admin screen, others on
+  Implementor screen; logged-out visitors see only the login form (and API returns no
+  data); create client →
   checklist auto-created; assign → appears in implementor's Open Items; Done without note
   blocked; Done with note → visible to admin with author + timestamp; module/training
   toggles persist; both screens on mobile width.
