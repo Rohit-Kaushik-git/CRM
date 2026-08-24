@@ -42,3 +42,28 @@ create policy tsk_upd       on tasks          for update to authenticated
   using (is_admin() or assignee_id = auth.uid());
 create policy nts_ins       on task_notes     for insert to authenticated
   with check (author_id = auth.uid());
+
+-- Column guard (spec 3: implementors may change only status on their own tasks).
+-- The tsk_upd policy above grants row access; this trigger pins which columns a
+-- non-admin may actually change (status + done_date — set together when marking Done).
+-- Service-role callers (import script) have auth.uid() = null and are exempt.
+create or replace function public.enforce_task_update_columns()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and not is_admin() then
+    if new.title       is distinct from old.title
+       or new.client_id   is distinct from old.client_id
+       or new.template_id is distinct from old.template_id
+       or new.assignee_id is distinct from old.assignee_id
+       or new.due_date    is distinct from old.due_date
+       or new.created_by  is distinct from old.created_by
+       or new.created_at  is distinct from old.created_at then
+      raise exception 'Implementors may only change task status';
+    end if;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists task_update_columns on tasks;
+create trigger task_update_columns before update on tasks
+for each row execute function public.enforce_task_update_columns();
