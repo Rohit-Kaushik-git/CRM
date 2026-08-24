@@ -52,6 +52,23 @@ class TestParseStatusCell(unittest.TestCase):
         self.assertEqual(parse_status_cell("N/A"), ("N/A", None, None))
         self.assertEqual(parse_status_cell("na"), ("N/A", None, None))
 
+    def test_na_with_detail_keeps_note(self):
+        status, done, note = parse_status_cell("N/A - see Sanya note")
+        self.assertEqual(status, "N/A")
+        self.assertIsNone(done)
+        self.assertEqual(note, "N/A - see Sanya note")
+
+    def test_not_applicable_with_detail_keeps_note(self):
+        status, done, note = parse_status_cell("Not applicable for this client")
+        self.assertEqual(status, "N/A")
+        self.assertEqual(note, "Not applicable for this client")
+
+    def test_name_pending_is_not_na(self):
+        status, done, note = parse_status_cell("name pending")
+        self.assertEqual(status, "Open")
+        self.assertIsNone(done)
+        self.assertEqual(note, "name pending")
+
     def test_free_text_preserved_as_note(self):
         status, done, note = parse_status_cell("https://jira.uzio.com/browse/PHIX-96116")
         self.assertEqual(status, "Open")

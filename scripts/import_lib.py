@@ -5,7 +5,8 @@ from datetime import date
 DEFAULT_YEAR = 2026
 _DONE_RE = re.compile(r"^\s*(completed|done)\b", re.I)
 _BARE_DONE_RE = re.compile(r"^\s*(completed|done)[\s\-–—]*$", re.I)
-_NA_RE = re.compile(r"^\s*(n/?a|not applicable)\s*$", re.I)
+_NA_RE = re.compile(r"^\s*(n/?a|not applicable)\b", re.I)
+_BARE_NA_RE = re.compile(r"^\s*(n/?a|not applicable)[\s\-–—]*$", re.I)
 _DATE_RE = re.compile(r"(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?")
 
 
@@ -33,7 +34,8 @@ def parse_status_cell(text):
     if not raw:
         return ("Open", None, None)
     if _NA_RE.match(raw):
-        return ("N/A", None, None)
+        note = None if _BARE_NA_RE.match(raw) else raw
+        return ("N/A", None, note)
     if _DONE_RE.match(raw):
         note = None if _BARE_DONE_RE.match(raw) else raw
         return ("Done", parse_date(raw), note)
