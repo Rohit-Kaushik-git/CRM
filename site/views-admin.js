@@ -208,5 +208,65 @@ Views.renderClientDetail = async (view, id) => {
   }
 };
 
-Views.renderOpenItems    = async (view) => { view.innerHTML = "<h1>Open Items</h1><p class='muted'>View not built yet (Task 6).</p>"; };
-Views.renderTeam         = async (view) => { view.innerHTML = "<h1>Team</h1><p class='muted'>View not built yet (Task 6).</p>"; };
+Views.renderOpenItems = async (view) => {
+  const [open, done] = await Promise.all([Store.listOpenItems(), Store.listDoneItems()]);
+  const groups = {};
+  open.forEach((t) => {
+    const k = t.assignee?.name || "Unassigned";
+    (groups[k] = groups[k] || []).push(t);
+  });
+  const openRow = (t) => `<tr>
+    <td><a href="#client/${t.client_id}">${esc(t.client?.dsp_name)}</a></td>
+    <td>${esc(t.title)}</td><td>${t.status}</td><td>${fmtDate(t.due_date)}</td>
+    <td class="notes-cell">${latestNote(t)}</td></tr>`;
+  const doneRow = (t) => `<tr>
+    <td><a href="#client/${t.client_id}">${esc(t.client?.dsp_name)}</a></td>
+    <td>${esc(t.title)}</td><td>${esc(t.assignee?.name || "—")}</td>
+    <td>${fmtDate(t.done_date)}</td><td class="notes-cell">${latestNote(t)}</td></tr>`;
+  view.innerHTML = `<div class="page-head"><h1>Open Items</h1>
+      <span class="muted">${open.length} open across ${Object.keys(groups).length} people</span></div>` +
+    (open.length ? Object.entries(groups).map(([who, ts]) => `
+      <h2>${esc(who)} <span class="muted">(${ts.length})</span></h2>
+      <table class="grid"><thead><tr>
+        <th>Client</th><th>Task</th><th>Status</th><th>Due</th><th>Latest note</th></tr></thead>
+      <tbody>${ts.map(openRow).join("")}</tbody></table>`).join("")
+      : `<p class="muted">Nothing open — all assigned work is done.</p>`) +
+    `<h2>Recently done <span class="muted">(last ${done.length})</span></h2>
+     <table class="grid"><thead><tr>
+       <th>Client</th><th>Task</th><th>By</th><th>Done</th><th>Note</th></tr></thead>
+     <tbody>${done.map(doneRow).join("") || `<tr><td colspan="5" class="muted">nothing yet</td></tr>`}</tbody></table>`;
+};
+Views.renderTeam = async (view) => {
+  const [users, adminEmails] = await Promise.all([Store.listUsers(), Store.getAdminEmails()]);
+  view.innerHTML = `<div class="page-head"><h1>Team</h1></div>
+    <p class="muted">Accounts are created by signing up on the login page with an @uzio.com email.
+       Admins are whoever is on the admin list (stored in app_config).</p>
+    <table class="grid"><thead><tr>
+      <th>Name</th><th>Email</th><th>Role</th><th>Active</th><th></th></tr></thead><tbody>
+    ${users.map((u) => `<tr data-id="${u.id}" data-email="${esc(u.email)}">
+      <td><input class="u-name" value="${esc(u.name)}"></td>
+      <td>${esc(u.email)}</td>
+      <td>${u.role}</td>
+      <td><input type="checkbox" class="u-active" ${u.active ? "checked" : ""}></td>
+      <td><button class="u-role small secondary" type="button">
+        ${u.role === "admin" ? "Make implementor" : "Make admin"}</button></td>
+    </tr>`).join("")}</tbody></table>`;
+  view.querySelectorAll("tbody tr").forEach((row) => {
+    const uid = row.dataset.id, email = row.dataset.email;
+    row.querySelector(".u-name").onchange = (e) =>
+      guard(() => Store.updateUser(uid, { name: e.target.value.trim() }));
+    row.querySelector(".u-active").onchange = (e) =>
+      guard(() => Store.updateUser(uid, { active: e.target.checked }));
+    row.querySelector(".u-role").onclick = () => guard(async () => {
+      const makeAdmin = !adminEmails.includes(email.toLowerCase());
+      const next = makeAdmin
+        ? [...adminEmails, email.toLowerCase()]
+        : adminEmails.filter((x) => x !== email.toLowerCase());
+      if (!next.length) { toast("At least one admin must remain"); return; }
+      await Store.setAdminEmails(next);
+      await Store.updateUser(uid, { role: makeAdmin ? "admin" : "implementor" });
+      toast("Role updated", true);
+      Views.renderTeam(view);
+    });
+  });
+};
