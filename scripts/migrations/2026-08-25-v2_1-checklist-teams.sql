@@ -134,4 +134,28 @@ begin
   return new;
 end $$;
 
+-- ownership model: who may update a task (status/done_date; column guard still applies)
+create or replace function public.can_work_task(t_client bigint, t_template bigint)
+returns boolean language sql stable security definer set search_path = public as $$
+  select is_admin()
+    or exists (  -- client's implementor works implementor-owned and ad-hoc tasks
+      select 1 from clients c
+      left join task_templates tt on tt.id = t_template
+      where c.id = t_client and c.implementor_id = auth.uid()
+        and coalesce(tt.owner_team, 'Implementor') = 'Implementor')
+    or exists (  -- team members work their team's tasks on any client
+      select 1 from task_templates tt
+      join users u on u.id = auth.uid()
+      join app_config cfg on cfg.key = case tt.owner_team
+            when 'Data Team' then 'team_data_team'
+            when 'Tax Team'  then 'team_tax_team'
+            when 'Shruti'    then 'team_pto' end
+      where tt.id = t_template
+        and lower(u.email) = any(string_to_array(lower(replace(cfg.value, ' ', '')), ',')))
+$$;
+
+drop policy if exists tsk_upd on tasks;
+create policy tsk_upd on tasks for update to authenticated
+  using (can_work_task(client_id, template_id));
+
 commit;

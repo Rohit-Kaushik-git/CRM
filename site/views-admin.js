@@ -10,6 +10,28 @@ function pct(tasks) {
   return Math.round((done / tasks.length) * 100);
 }
 
+function statusPill(s) {
+  const cls = { "Open": "pill-open", "In Progress": "pill-progress",
+                "Done": "pill-done", "N/A": "pill-na" }[s] || "pill-open";
+  return `<span class="pill ${cls}">${esc(s)}</span>`;
+}
+function clientStatusPill(s) {
+  const cls = { "Not Started": "pill-notstarted", "In Progress": "pill-progress",
+                "Live": "pill-live", "Completed": "pill-completed" }[s] || "pill-open";
+  return `<span class="pill ${cls}">${esc(s)}</span>`;
+}
+function ownerTag(t) {
+  const team = t.template?.owner_team || "Implementor";
+  if (team === "Implementor") return "";
+  return `<span class="tag tag-${team.replace(/[^A-Za-z]/g, "").toLowerCase()}">${esc(team)}</span>`;
+}
+function taskOwnerLabel(t) {
+  const team = t.template?.owner_team;
+  if (!team || team === "Implementor") return t.client?.implementor?.name || "No implementor";
+  return team;
+}
+function isMigrating(c) { return c.vendor === "ADP" || c.vendor === "Paycom"; }
+
 const LIVE_SOON_DAYS = 14, UNOWNED_WINDOW_DAYS = 21, STALE_DAYS = 7;
 
 function daysUntil(dateStr) {
@@ -29,16 +51,17 @@ function clientRow(c) {
   return `<tr class="rowlink" data-id="${c.id}">
     <td><b>${esc(c.dsp_name)}</b></td><td>${esc(c.short_code)}</td><td>${esc(c.vendor || "—")}</td>
     <td><span class="rag rag-${c.rag || "none"}"></span></td>
-    <td>${esc(c.status)}</td><td>${esc(c.implementor?.name || "—")}</td>
+    <td>${clientStatusPill(c.status)}</td><td>${esc(c.implementor?.name || "—")}</td>
     <td>${fmtDate(c.tt_live_date)}</td>
     <td><span class="bar"><span style="width:${pct(c.tasks)}%"></span></span> ${pct(c.tasks)}%</td>
     <td>${(c.client_modules || []).filter((m) => m.opted)
+          .sort((a, b) => CONFIG.MODULES.indexOf(a.module) - CONFIG.MODULES.indexOf(b.module))
           .map((m) => `<span class="chip">${m.module}</span>`).join("") || "—"}</td>
   </tr>`;
 }
 
 const CLIENT_TABLE_HEAD = `<thead><tr>
-  <th>DSP</th><th>Code</th><th>Vendor</th><th>RAG</th><th>Status</th>
+  <th>DSP</th><th>Code</th><th>Previous System</th><th>RAG</th><th>Status</th>
   <th>Implementor</th><th>TT live</th><th>Checklist</th><th>Modules</th></tr></thead>`;
 
 function wireClientRows(view) {
@@ -128,31 +151,72 @@ Views.renderToday = async (view) => {
 
 Views.renderClients = async (view) => {
   const clients = await Store.listClients();
+  const state = { q: "", status: "", vendor: "", rag: "" };
+  const matches = () => clients.filter((c) =>
+    (!state.q || (c.dsp_name + " " + c.short_code).toLowerCase().includes(state.q)) &&
+    (!state.status || c.status === state.status) &&
+    (!state.vendor || (c.vendor || "—") === state.vendor) &&
+    (!state.rag || (c.rag || "") === state.rag));
   view.innerHTML = `
     <div class="page-head"><h1>Clients</h1><button id="new-client" type="button">+ New client</button></div>
-    <div id="new-client-form" class="card">
-      <input id="nc-name" placeholder="DSP name">
-      <input id="nc-code" placeholder="Short code" maxlength="8" style="width:110px">
-      <select id="nc-vendor"><option value="">Vendor…</option><option>ADP</option><option>Paycom</option></select>
-      <input id="nc-tt" type="date" title="TT live date">
-      <button id="nc-save" type="button">Create</button>
+    <div class="filter-bar">
+      <input id="cf-q" type="search" placeholder="Search DSP name or code…">
+      <select id="cf-status"><option value="">All statuses</option>
+        ${CLIENT_STATUS_OPTS.map((s) => `<option>${s}</option>`).join("")}</select>
+      <select id="cf-vendor"><option value="">All previous systems</option>
+        <option>ADP</option><option>Paycom</option><option>New</option><option value="—">Not set</option></select>
+      <select id="cf-rag"><option value="">All RAG</option>
+        <option value="G">Green</option><option value="A">Amber</option><option value="R">Red</option></select>
+      <span id="cf-count" class="muted"></span>
     </div>
-    <table class="grid">${CLIENT_TABLE_HEAD}<tbody>${clients.map(clientRow).join("")}</tbody></table>
-    ${clients.length ? "" : `<p class="muted">No clients yet — create one above or run the import.</p>`}`;
-  $("#new-client").onclick = () => $("#new-client-form").classList.toggle("open");
-  $("#nc-save").onclick = () => guard(async () => {
-    const name = $("#nc-name").value.trim();
-    if (!name) { toast("DSP name is required"); return; }
-    const c = await Store.createClient({
-      dsp_name: name,
-      short_code: $("#nc-code").value.trim().toUpperCase(),
-      vendor: $("#nc-vendor").value || null,
-      tt_live_date: $("#nc-tt").value || null,
+    <table class="grid">${CLIENT_TABLE_HEAD}<tbody id="client-rows"></tbody></table>
+    <div class="modal-backdrop" id="nc-modal">
+      <div class="modal">
+        <h2>New client</h2>
+        <form id="nc-form">
+          <label>DSP name <input id="nc-name" required></label>
+          <label>Short code <input id="nc-code" maxlength="8"></label>
+          <label>Previous system <select id="nc-vendor" required>
+            <option value="">Choose…</option><option>ADP</option><option>Paycom</option><option>New</option></select></label>
+          <label>Time Tracking live date <input id="nc-tt" type="date"></label>
+          <label>Payroll live date <input id="nc-pay" type="date"></label>
+          <div class="actions">
+            <button type="button" class="secondary" id="nc-cancel">Cancel</button>
+            <button type="submit">Create</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  const renderRows = () => {
+    const list = matches();
+    $("#client-rows").innerHTML = list.map(clientRow).join("") ||
+      `<tr><td colspan="9" class="muted">No clients match.</td></tr>`;
+    $("#cf-count").textContent = `${list.length} of ${clients.length}`;
+    wireClientRows(view);
+  };
+  $("#cf-q").oninput = (e) => { state.q = e.target.value.trim().toLowerCase(); renderRows(); };
+  $("#cf-status").onchange = (e) => { state.status = e.target.value; renderRows(); };
+  $("#cf-vendor").onchange = (e) => { state.vendor = e.target.value; renderRows(); };
+  $("#cf-rag").onchange = (e) => { state.rag = e.target.value; renderRows(); };
+  const modal = $("#nc-modal");
+  $("#new-client").onclick = () => { modal.classList.add("open"); $("#nc-name").focus(); };
+  $("#nc-cancel").onclick = () => modal.classList.remove("open");
+  modal.onclick = (e) => { if (e.target === modal) modal.classList.remove("open"); };
+  $("#nc-form").onsubmit = (e) => {
+    e.preventDefault();
+    guard(async () => {
+      const c = await Store.createClient({
+        dsp_name: $("#nc-name").value.trim(),
+        short_code: $("#nc-code").value.trim().toUpperCase(),
+        vendor: $("#nc-vendor").value || null,
+        tt_live_date: $("#nc-tt").value || null,
+        first_pay_date: $("#nc-pay").value || null,
+      });
+      toast("Client created", true);
+      location.hash = `#client/${c.id}`;
     });
-    toast("Client created", true);
-    location.hash = `#client/${c.id}`;
-  });
-  wireClientRows(view);
+  };
+  renderRows();
 };
 
 Views.renderClientDetail = async (view, id) => {

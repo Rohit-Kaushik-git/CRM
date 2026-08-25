@@ -74,7 +74,7 @@ window.Store = (() => {
     const { data, error } = await sb.from("clients")
       .select(`*, implementor:users(name),
                tasks(id,title,status,assignee_id,due_date,
-                     template:task_templates(phase),
+                     template:task_templates(phase,owner_team),
                      assignee:users!tasks_assignee_id_fkey(name)),
                client_modules(module,opted,training_done)`)
       .order("dsp_name");
@@ -123,29 +123,37 @@ window.Store = (() => {
     if (error) fail(error);
   }
 
-  function openItemsQuery() {
+  function ownedTasksQuery() {
     return sb.from("tasks")
-      .select(`*, client:clients(dsp_name,short_code), assignee:users!tasks_assignee_id_fkey(name),
-               task_notes(note,created_at,author:users(name))`)
-      .not("assignee_id", "is", null);
+      .select(`*, client:clients(id,dsp_name,short_code,vendor,implementor_id,implementor:users(name)),
+               template:task_templates(phase,owner_team),
+               task_notes(note,created_at,author:users(name))`);
   }
 
-  async function listOpenItems(assigneeId) {
-    let q = openItemsQuery().in("status", ["Open", "In Progress"])
-      .order("due_date", { ascending: true, nullsFirst: false });
-    if (assigneeId) q = q.eq("assignee_id", assigneeId);
-    const { data, error } = await q;
+  async function listOpenTasks() {
+    const { data, error } = await ownedTasksQuery()
+      .in("status", ["Open", "In Progress"]).order("created_at");
     if (error) fail(error);
     return data;
   }
 
-  async function listDoneItems(assigneeId) {
-    let q = openItemsQuery().eq("status", "Done")
+  async function listDoneTasks() {
+    const { data, error } = await ownedTasksQuery().eq("status", "Done")
       .order("done_date", { ascending: false, nullsFirst: false }).limit(100);
-    if (assigneeId) q = q.eq("assignee_id", assigneeId);
-    const { data, error } = await q;
     if (error) fail(error);
     return data;
+  }
+
+  async function getTeams() {
+    const { data, error } = await sb.from("app_config").select("*").like("key", "team_%");
+    if (error) fail(error);
+    const keys = { "Data Team": "team_data_team", "Tax Team": "team_tax_team", "Shruti": "team_pto" };
+    const out = {};
+    for (const [team, key] of Object.entries(keys)) {
+      const row = (data || []).find((r) => r.key === key);
+      out[team] = (row?.value || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    }
+    return out;
   }
 
   async function listLastActivity() {
@@ -167,5 +175,5 @@ window.Store = (() => {
   return { signUp, signIn, signOut, loadMe, getMe, resetPassword, updatePassword, onPasswordRecovery, listUsers, updateUser,
            getAdminEmails, setAdminEmails, listClients, getClient, createClient,
            updateClient, updateModule, createTask, updateTask, addNote,
-           listOpenItems, listDoneItems, listLastActivity, getActivity };
+           listOpenTasks, listDoneTasks, getTeams, listLastActivity, getActivity };
 })();

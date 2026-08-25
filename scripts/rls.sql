@@ -12,6 +12,26 @@ create or replace function public.is_admin()
 returns boolean language sql stable security definer set search_path = public as
 $$ select exists (select 1 from users where id = auth.uid() and role = 'admin' and active) $$;
 
+-- ownership model: who may update a task (status/done_date; column guard still applies)
+create or replace function public.can_work_task(t_client bigint, t_template bigint)
+returns boolean language sql stable security definer set search_path = public as $$
+  select is_admin()
+    or exists (  -- client's implementor works implementor-owned and ad-hoc tasks
+      select 1 from clients c
+      left join task_templates tt on tt.id = t_template
+      where c.id = t_client and c.implementor_id = auth.uid()
+        and coalesce(tt.owner_team, 'Implementor') = 'Implementor')
+    or exists (  -- team members work their team's tasks on any client
+      select 1 from task_templates tt
+      join users u on u.id = auth.uid()
+      join app_config cfg on cfg.key = case tt.owner_team
+            when 'Data Team' then 'team_data_team'
+            when 'Tax Team'  then 'team_tax_team'
+            when 'Shruti'    then 'team_pto' end
+      where tt.id = t_template
+        and lower(u.email) = any(string_to_array(lower(replace(cfg.value, ' ', '')), ',')))
+$$;
+
 drop policy if exists cfg_read  on app_config;     drop policy if exists cfg_admin_upd on app_config;
 drop policy if exists usr_read  on users;          drop policy if exists usr_admin_upd on users;
 drop policy if exists cli_read  on clients;        drop policy if exists cli_admin_ins on clients;
@@ -39,7 +59,7 @@ create policy cli_admin_upd on clients        for update to authenticated using 
 create policy mod_admin_upd on client_modules for update to authenticated using (is_admin());
 create policy tsk_admin_ins on tasks          for insert to authenticated with check (is_admin());
 create policy tsk_upd       on tasks          for update to authenticated
-  using (is_admin() or assignee_id = auth.uid());
+  using (can_work_task(client_id, template_id));
 create policy nts_ins       on task_notes     for insert to authenticated
   with check (author_id = auth.uid());
 
