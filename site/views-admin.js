@@ -159,7 +159,7 @@ Views.renderClientDetail = async (view, id) => {
   const me = Store.getMe();
   const isAdmin = me.role === "admin";
   const dis = isAdmin ? "" : "disabled";
-  const [c, users] = await Promise.all([Store.getClient(id), Store.listUsers()]);
+  const [c, users, activity] = await Promise.all([Store.getClient(id), Store.listUsers(), Store.getActivity(id)]);
   const active = users.filter((u) => u.active);
   const userOpts = (sel) => `<option value="">Unassigned</option>` + active.map((u) =>
     `<option value="${u.id}" ${u.id === sel ? "selected" : ""}>${esc(u.name)}</option>`).join("");
@@ -198,6 +198,14 @@ Views.renderClientDetail = async (view, id) => {
       <h1>${esc(c.dsp_name)} <span class="muted">${esc(c.short_code)}</span></h1>
       <a href="#${isAdmin ? "clients" : "my-clients"}">← back</a>
     </div>
+    <div style="margin:-6px 0 12px;display:flex;gap:8px;flex-wrap:wrap">
+      ${(() => { const d = daysUntil(c.tt_live_date);
+                 return d === null ? "" : `<span class="chip"><b>${countdownLabel(d)}</b></span>`; })()}
+      ${(() => { const m = (c.notes || "").match(/coverage:\s*(\S+)/i);
+                 return m ? `<span class="chip">Audit folder ${esc(m[1])}</span>` : ""; })()}
+      <span class="chip">Onboarding ${pct(tasksFor("onboarding"))}%</span>
+      <span class="chip">Audit ${pct(tasksFor("audit"))}%</span>
+    </div>
     <div class="card head-grid">
       <label>Status <select id="c-status" ${dis}>
         ${CLIENT_STATUS_OPTS.map((s) => `<option ${s === c.status ? "selected" : ""}>${s}</option>`).join("")}
@@ -230,7 +238,14 @@ Views.renderClientDetail = async (view, id) => {
       <select id="adhoc-assignee">${userOpts(null)}</select>
       <input id="adhoc-due" type="date">
       <button id="adhoc-add" type="button">Add task</button>
-    </div>` : ""}`;
+    </div>` : ""}
+    <div class="card" style="margin-top:14px">
+      <h2 style="margin-top:0">Activity</h2>
+      ${activity.length ? activity.map((a) => `<div class="act-row">
+          <span class="when">${a.created_at.slice(0, 16).replace("T", " ")}</span>
+          <b>${esc(a.actor?.name || "sync")}</b> ${esc(a.detail)}</div>`).join("")
+        : `<p class="muted">No activity recorded yet.</p>`}
+    </div>`;
 
   const reload = () => Views.renderClientDetail(view, id);
 
