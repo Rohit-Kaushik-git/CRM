@@ -11,7 +11,7 @@ create table app_config (
 );
 insert into app_config values ('admin_emails', 'rohit.kaushik@uzio.com');
 insert into app_config values
-  ('team_data_team', 'shobhit.sharma@uzio.com'),
+  ('team_data_team', 'shobhit.sharma@uzio.com,rohit.kaushik@uzio.com'),
   ('team_tax_team', ''),
   ('team_pto', '');
 
@@ -66,6 +66,7 @@ create table tasks (
   assignee_id uuid references users(id),
   status      text not null default 'Open' check (status in ('Open','In Progress','Done','N/A')),
   due_date    date,
+  assigned_team text check (assigned_team in ('Data Team','Tax Team','Shruti')),
   done_date   date,
   created_by  uuid references users(id),
   created_at  timestamptz not null default now(),
@@ -192,10 +193,15 @@ begin
     select name into who from users where id = new.assignee_id;
     insert into activity_log (client_id, task_id, actor_id, action, detail)
     values (new.client_id, new.id, auth.uid(), 'assigned',
-            new.title || ' → ' || coalesce(who, 'unassigned'));
+            new.title || ' → ' || coalesce(who, 'auto'));
+  end if;
+  if new.assigned_team is distinct from old.assigned_team then
+    insert into activity_log (client_id, task_id, actor_id, action, detail)
+    values (new.client_id, new.id, auth.uid(), 'assigned',
+            new.title || ' → ' || coalesce(new.assigned_team, 'auto'));
   end if;
   if auth.uid() is not null and pg_trigger_depth() = 1 then
-    new.app_touched := true;  -- direct human write only; cascaded trigger updates don't count
+    new.app_touched := true;  -- direct human write only
   end if;
   return new;
 end $$;

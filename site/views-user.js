@@ -9,6 +9,8 @@ Views.renderMyItems = async (view) => {
   const myEmail = (me.email || "").toLowerCase();
   const myTeams = Object.entries(teams).filter(([, l]) => l.includes(myEmail)).map(([t]) => t);
   const isMine = (t) => {
+    if (t.assignee_id) return t.assignee_id === me.id;
+    if (t.assigned_team) return myTeams.includes(t.assigned_team);
     const team = t.template?.owner_team;
     if (!team || team === "Implementor") return t.client?.implementor_id === me.id;
     return myTeams.includes(team);

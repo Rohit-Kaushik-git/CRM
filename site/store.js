@@ -73,7 +73,7 @@ window.Store = (() => {
   async function listClients() {
     const { data, error } = await sb.from("clients")
       .select(`*, implementor:users(name),
-               tasks(id,title,status,assignee_id,due_date,
+               tasks(id,title,status,assignee_id,assigned_team,due_date,
                      template:task_templates(phase,owner_team),
                      assignee:users!tasks_assignee_id_fkey(name)),
                client_modules(module,opted,training_done)`)
@@ -133,6 +133,7 @@ window.Store = (() => {
   function ownedTasksQuery() {
     return sb.from("tasks")
       .select(`*, client:clients(id,dsp_name,short_code,vendor,implementor_id,implementor:users(name)),
+               assignee:users!tasks_assignee_id_fkey(name),
                template:task_templates(phase,owner_team),
                task_notes(note,created_at,author:users(name))`);
   }

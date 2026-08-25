@@ -12,24 +12,38 @@ create or replace function public.is_admin()
 returns boolean language sql stable security definer set search_path = public as
 $$ select exists (select 1 from users where id = auth.uid() and role = 'admin' and active) $$;
 
+-- membership helper (shared by can_work_task and RLS)
+create or replace function public.in_team(team text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from users u
+    join app_config cfg on cfg.key = case team
+          when 'Data Team' then 'team_data_team'
+          when 'Tax Team'  then 'team_tax_team'
+          when 'Shruti'    then 'team_pto' end
+    where u.id = auth.uid() and u.active
+      and lower(u.email) = any(string_to_array(lower(replace(cfg.value, ' ', '')), ',')))
+$$;
+
 -- ownership model: who may update a task (status/done_date; column guard still applies)
-create or replace function public.can_work_task(t_client bigint, t_template bigint)
+-- new signature: explicit assignment wins, derived default otherwise
+drop function if exists public.can_work_task(bigint, bigint);
+create or replace function public.can_work_task(
+  t_client bigint, t_template bigint, t_assignee uuid, t_team text)
 returns boolean language sql stable security definer set search_path = public as $$
   select is_admin()
-    or exists (  -- client's implementor works implementor-owned and ad-hoc tasks
-      select 1 from clients c
-      left join task_templates tt on tt.id = t_template
-      where c.id = t_client and c.implementor_id = auth.uid()
-        and coalesce(tt.owner_team, 'Implementor') = 'Implementor')
-    or exists (  -- team members work their team's tasks on any client
-      select 1 from task_templates tt
-      join users u on u.id = auth.uid() and u.active
-      join app_config cfg on cfg.key = case tt.owner_team
-            when 'Data Team' then 'team_data_team'
-            when 'Tax Team'  then 'team_tax_team'
-            when 'Shruti'    then 'team_pto' end
-      where tt.id = t_template
-        and lower(u.email) = any(string_to_array(lower(replace(cfg.value, ' ', '')), ',')))
+    or t_assignee = auth.uid()
+    or (t_team is not null and in_team(t_team))
+    or (t_assignee is null and t_team is null and (
+      exists (
+        select 1 from clients c
+        left join task_templates tt on tt.id = t_template
+        where c.id = t_client and c.implementor_id = auth.uid()
+          and coalesce(tt.owner_team, 'Implementor') = 'Implementor')
+      or exists (
+        select 1 from task_templates tt
+        where tt.id = t_template and tt.owner_team <> 'Implementor'
+          and in_team(tt.owner_team))))
 $$;
 
 drop policy if exists cfg_read  on app_config;     drop policy if exists cfg_admin_upd on app_config;
@@ -59,7 +73,7 @@ create policy cli_admin_upd on clients        for update to authenticated using 
 create policy mod_admin_upd on client_modules for update to authenticated using (is_admin());
 create policy tsk_admin_ins on tasks          for insert to authenticated with check (is_admin());
 create policy tsk_upd       on tasks          for update to authenticated
-  using (can_work_task(client_id, template_id));
+  using (can_work_task(client_id, template_id, assignee_id, assigned_team));
 create policy nts_ins       on task_notes     for insert to authenticated
   with check (author_id = auth.uid());
 
@@ -79,6 +93,7 @@ begin
        or new.client_id   is distinct from old.client_id
        or new.template_id is distinct from old.template_id
        or new.assignee_id is distinct from old.assignee_id
+       or new.assigned_team is distinct from old.assigned_team
        or new.due_date    is distinct from old.due_date
        or new.created_by  is distinct from old.created_by
        or new.created_at  is distinct from old.created_at then

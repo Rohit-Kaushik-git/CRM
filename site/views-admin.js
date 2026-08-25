@@ -21,15 +21,17 @@ function clientStatusPill(s) {
                 "Cancelled": "pill-cancelled", "On Hold": "pill-onhold", "Unresponsive": "pill-unresponsive" }[s] || "pill-open";
   return `<span class="pill ${cls}">${esc(s)}</span>`;
 }
-function ownerTag(t) {
-  const team = t.template?.owner_team || "Implementor";
-  if (team === "Implementor") return "";
-  return `<span class="tag tag-${team.replace(/[^A-Za-z]/g, "").toLowerCase()}">${esc(team)}</span>`;
-}
-function taskOwnerLabel(t) {
+const TEAM_NAMES = ["Data Team", "Tax Team", "Shruti"];
+
+function derivedOwnerLabel(t, client) {
   const team = t.template?.owner_team;
-  if (!team || team === "Implementor") return t.client?.implementor?.name || "No implementor";
+  if (!team || team === "Implementor") return client?.implementor?.name || "Unassigned";
   return team;
+}
+function effectiveOwnerLabel(t, client) {
+  if (t.assignee_id) return t.assignee?.name || "Assigned";
+  if (t.assigned_team) return t.assigned_team;
+  return derivedOwnerLabel(t, client);
 }
 function isMigrating(c) { return c.vendor === "ADP" || c.vendor === "Paycom"; }
 
@@ -109,7 +111,7 @@ Views.renderToday = async (view) => {
       <td>${clientStatusPill(c.status)}</td></tr>`).join("");
   const overdueRows = overdue.map((t) => `<tr>
       <td>${clientLink(t._client)}</td><td>${esc(t.title)}</td>
-      <td>${esc(taskOwnerLabel(t))}</td><td class="overdue">${fmtDate(t.due_date)}</td>
+      <td>${esc(effectiveOwnerLabel(t, t._client))}</td><td class="overdue">${fmtDate(t.due_date)}</td>
       <td>${statusPill(t.status)}</td></tr>`).join("");
   const unownedRows = unowned.map(({ c, open }) => `<tr>
       <td>${clientLink(c)}</td>
@@ -237,6 +239,8 @@ Views.renderClientDetail = async (view, id) => {
   const myTeams = Object.entries(teams).filter(([, list]) => list.includes(myEmail)).map(([t]) => t);
   const canWork = (t) => {
     if (isAdmin) return true;
+    if (t.assignee_id) return t.assignee_id === me.id;
+    if (t.assigned_team) return myTeams.includes(t.assigned_team);
     const team = t.template?.owner_team;
     if (!team || team === "Implementor") return c.implementor_id === me.id;
     return myTeams.includes(team);
@@ -244,6 +248,16 @@ Views.renderClientDetail = async (view, id) => {
 
   const todayIsoLocal = (() => { const n = new Date();
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; })();
+  const ownerCell = (t) => {
+    const label = effectiveOwnerLabel(t, c);
+    if (!isAdmin) return esc(label);
+    const cur = t.assignee_id ? `u:${t.assignee_id}` : (t.assigned_team ? `t:${t.assigned_team}` : "");
+    return `<select class="t-owner">
+      <option value="" ${cur === "" ? "selected" : ""}>Auto (${esc(derivedOwnerLabel(t, c))})</option>
+      ${TEAM_NAMES.map((x) => `<option value="t:${x}" ${cur === "t:" + x ? "selected" : ""}>${x}</option>`).join("")}
+      ${active.map((u) => `<option value="u:${u.id}" ${cur === "u:" + u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}
+    </select>`;
+  };
   const taskRow = (t) => {
     const editable = canWork(t);
     const notes = (t.task_notes || []).slice().sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -253,10 +267,8 @@ Views.renderClientDetail = async (view, id) => {
       ? ` <span class="${t.due_date < todayIsoLocal && t.status !== "Done" ? "overdue" : "muted"}">due ${t.due_date}</span>` : "";
     const selCls = { "Done": "sel-done", "In Progress": "sel-inprogress", "N/A": "sel-na" }[t.status] || "";
     return `<tr data-task="${t.id}">
-      <td>${esc(t.title)}${t.template_id ? ownerTag(t) : ` <span class="chip">ad-hoc</span>`}${due}</td>
-      <td>${(() => { const team = t.template?.owner_team;
-        if (!team || team === "Implementor") return esc(c.implementor?.name || "Unassigned");
-        return esc(team); })()}</td>
+      <td>${esc(t.title)}${!t.template_id ? ` <span class="chip">ad-hoc</span>` : ""}${due}</td>
+      <td>${ownerCell(t)}</td>
       <td>${editable
         ? `<select class="t-status ${selCls}">${STATUS_OPTS.map((s) => `<option ${s === t.status ? "selected" : ""}>${s}</option>`).join("")}</select>`
         : statusPill(t.status)}</td>
@@ -401,6 +413,18 @@ Views.renderClientDetail = async (view, id) => {
         const note = prompt("Note:");
         if (note && note.trim()) { await Store.addNote(tid, note.trim()); toast("Note added", true); reload(); }
       });
+      const ow = row.querySelector(".t-owner");
+      if (ow) ow.onchange = () => {
+        const v = ow.value;
+        const patch = v.startsWith("u:") ? { assignee_id: v.slice(2), assigned_team: null }
+                    : v.startsWith("t:") ? { assignee_id: null, assigned_team: v.slice(2) }
+                    : { assignee_id: null, assigned_team: null };
+        const prev = { assignee_id: t.assignee_id, assigned_team: t.assigned_team };
+        saveChange(`${t.title} → ${ow.options[ow.selectedIndex].text}`,
+          () => Store.updateTask(tid, patch),
+          () => Store.updateTask(tid, prev),
+          reload);
+      };
     });
   };
   const tabOnb = $("#tab-onb"); if (tabOnb) tabOnb.onclick = () => renderTasks("onboarding");
@@ -461,16 +485,16 @@ Views.renderClientDetail = async (view, id) => {
 Views.renderOpenItems = async (view) => {
   const [open, done] = await Promise.all([Store.listOpenTasks(), Store.listDoneTasks()]);
   const groups = {};
-  open.forEach((t) => { const k = taskOwnerLabel(t); (groups[k] = groups[k] || []).push(t); });
+  open.forEach((t) => { const k = effectiveOwnerLabel(t, t.client); (groups[k] = groups[k] || []).push(t); });
   const openRow = (t) => `<tr>
     <td><a href="#client/${t.client_id}">${esc(t.client?.dsp_name)}</a></td>
-    <td>${esc(t.title)}${ownerTag(t)}</td>
+    <td>${esc(t.title)}</td>
     <td>${statusPill(t.status)}</td>
     <td class="notes-cell">${latestNote(t)}</td></tr>`;
   const doneRow = (t) => `<tr>
     <td><a href="#client/${t.client_id}">${esc(t.client?.dsp_name)}</a></td>
     <td>${esc(t.title)}</td>
-    <td>${esc(taskOwnerLabel(t))}</td>
+    <td>${esc(effectiveOwnerLabel(t, t.client))}</td>
     <td>${fmtDate(t.done_date)}</td>
     <td class="notes-cell">${latestNote(t)}</td></tr>`;
   const order = Object.keys(groups).sort();
