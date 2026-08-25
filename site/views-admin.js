@@ -22,6 +22,7 @@ function clientStatusPill(s) {
   return `<span class="pill ${cls}">${esc(s)}</span>`;
 }
 const TEAM_NAMES = ["Data Team", "Tax Team", "Shruti"];
+let auditFilter = "all", auditQuery = "";
 
 function derivedOwnerLabel(t, client) {
   const team = t.template?.owner_team;
@@ -151,6 +152,62 @@ Views.renderToday = async (view) => {
       table(`<th>Client</th><th>Countdown</th><th>Open audit items</th>`, gapRows)) +
     section("Gone quiet", stale.length,
       table(`<th>Client</th><th>Silence</th><th>Implementor</th><th>Status</th>`, staleRows));
+};
+
+Views.renderAuditStatus = async (view) => {
+  const clients = (await Store.listClients()).filter(isMigrating);
+  const auditTasks = (c) => (c.tasks || [])
+    .filter((t) => t.template?.phase === "audit")
+    .sort((a, b) => (a.template?.sort_order ?? 0) - (b.template?.sort_order ?? 0));
+  const colTitles = [];
+  clients.forEach((c) => auditTasks(c).forEach((t) => {
+    if (!colTitles.includes(t.title)) colTitles.push(t.title);
+  }));
+  const doneish = (t) => t.status === "Done" || t.status === "N/A";
+  const clientState = (c) => {
+    const ts = auditTasks(c);
+    if (!ts.length) return "none";
+    return ts.every(doneish) ? "done" : "pending";
+  };
+  const matches = () => clients.filter((c) =>
+    (!auditQuery || (c.dsp_name + " " + c.short_code).toLowerCase().includes(auditQuery)) &&
+    (auditFilter === "all" || clientState(c) === auditFilter));
+
+  const cellPill = (t) => t ? statusPill(t.status) : `<span class="muted">—</span>`;
+  const rowHtml = (c) => {
+    const byTitle = Object.fromEntries(auditTasks(c).map((t) => [t.title, t]));
+    const ts = auditTasks(c);
+    const p = ts.length ? Math.round(ts.filter(doneish).length / ts.length * 100) : 0;
+    return `<tr class="rowlink" data-id="${c.id}">
+      <td><b>${esc(c.dsp_name)}</b><div class="muted" style="font-size:11px">${esc(c.implementor?.name || "—")}</div></td>
+      ${colTitles.map((title) => `<td>${cellPill(byTitle[title])}</td>`).join("")}
+      <td><span class="bar"><span style="width:${p}%"></span></span> ${p}%</td></tr>`;
+  };
+
+  const render = () => {
+    const list = matches();
+    $("#audit-rows").innerHTML = list.map(rowHtml).join("") ||
+      `<tr><td colspan="${colTitles.length + 2}" class="muted">No clients match.</td></tr>`;
+    $("#audit-count").textContent = `${list.length} of ${clients.length} migrating clients`;
+    wireClientRows(view);
+  };
+
+  view.innerHTML = `
+    <div class="page-head"><h1>Audit Status</h1><span id="audit-count" class="muted"></span></div>
+    <div class="filter-bar">
+      <input id="as-q" type="search" placeholder="Search client…" value="${esc(auditQuery)}">
+      <select id="as-filter">
+        <option value="all" ${auditFilter === "all" ? "selected" : ""}>All</option>
+        <option value="done" ${auditFilter === "done" ? "selected" : ""}>All done</option>
+        <option value="pending" ${auditFilter === "pending" ? "selected" : ""}>Pending</option>
+      </select>
+    </div>
+    <div style="overflow-x:auto"><table class="grid"><thead><tr>
+      <th>Client</th>${colTitles.map((t) => `<th>${esc(t.replace(" Audit", ""))}</th>`).join("")}<th>Done</th>
+    </tr></thead><tbody id="audit-rows"></tbody></table></div>`;
+  $("#as-q").oninput = (e) => { auditQuery = e.target.value.trim().toLowerCase(); render(); };
+  $("#as-filter").onchange = (e) => { auditFilter = e.target.value; render(); };
+  render();
 };
 
 Views.renderClients = async (view) => {

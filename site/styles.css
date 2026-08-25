@@ -111,3 +111,10 @@ select.sel-na { background: #f4f4f4; color: #a6adb5; }
 .pill-cancelled { background: #fbe3e7; color: #a4243b; }
 .pill-onhold { background: #fdf3d7; color: #8a6d00; }
 .pill-unresponsive { background: #ece4f6; color: #6b34a8; }
+
+details.cgroup { margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+details.cgroup > summary { cursor: pointer; padding: 10px 14px; list-style: none; display: flex; gap: 8px; align-items: center; }
+details.cgroup > summary::-webkit-details-marker { display: none; }
+details.cgroup > summary::before { content: "▸"; color: var(--muted); }
+details.cgroup[open] > summary::before { content: "▾"; }
+details.cgroup table.grid { border: none; border-radius: 0; }

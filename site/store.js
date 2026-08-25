@@ -74,7 +74,7 @@ window.Store = (() => {
     const { data, error } = await sb.from("clients")
       .select(`*, implementor:users(name),
                tasks(id,title,status,assignee_id,assigned_team,due_date,
-                     template:task_templates(phase,owner_team),
+                     template:task_templates(phase,owner_team,sort_order),
                      assignee:users!tasks_assignee_id_fkey(name)),
                client_modules(module,opted,training_done)`)
       .order("dsp_name");

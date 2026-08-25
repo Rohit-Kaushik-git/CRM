@@ -1,6 +1,9 @@
 /* Implementor views. Client detail is shared: Views.renderClientDetail handles both roles. */
 window.Views = window.Views || {};
 
+const myItemsExpanded = new Set();
+let myItemsQuery = "";
+
 Views.renderMyItems = async (view) => {
   const me = Store.getMe();
   const [open, done, teams] = await Promise.all([
@@ -23,27 +26,49 @@ Views.renderMyItems = async (view) => {
     (byClient[k] = byClient[k] || []).push(t);
   });
   const row = (t) => `<tr data-task="${t.id}">
-    <td>${esc(t.title)}</td><td>${statusPill(t.status)}</td><td>${fmtDate(t.due_date)}</td>
+    <td>${esc(t.title)}</td><td>${statusPill(t.status)}</td>
     <td class="notes-cell">${latestNote(t)}</td>
     <td>
       ${t.status === "Open" ? `<button class="t-start small secondary" type="button">Start</button>` : ""}
       <button class="t-done small" type="button">Done</button>
       <button class="t-addnote small secondary" type="button">+ note</button>
     </td></tr>`;
-  view.innerHTML = `<div class="page-head"><h1>My Open Items</h1>
-      <span class="muted">${items.length} open</span></div>` +
-    (items.length ? Object.entries(byClient).map(([name, ts]) => `
-      <h2>${esc(name)}</h2>
+  const groupHtml = (name, ts) => `
+    <details class="cgroup" data-client="${esc(name)}" ${myItemsExpanded.has(name) ? "open" : ""}>
+      <summary><b>${esc(name)}</b> <span class="muted">(${ts.length} open)</span></summary>
       <table class="grid"><thead><tr>
-        <th>Task</th><th>Status</th><th>Due</th><th>Latest note</th><th>Actions</th></tr></thead>
-      <tbody>${ts.map(row).join("")}</tbody></table>`).join("")
+        <th>Task</th><th>Status</th><th>Latest note</th><th>Actions</th></tr></thead>
+      <tbody>${ts.map(row).join("")}</tbody></table>
+    </details>`;
+  const visibleGroups = Object.entries(byClient).filter(([name]) =>
+    !myItemsQuery || name.toLowerCase().includes(myItemsQuery));
+  view.innerHTML = `<div class="page-head"><h1>My Open Items</h1>
+      <span class="muted">${items.length} open</span></div>
+    <div class="filter-bar"><input id="mi-q" type="search" placeholder="Search client…" value="${esc(myItemsQuery)}"></div>` +
+    (items.length
+      ? (visibleGroups.length
+          ? visibleGroups.map(([name, ts]) => groupHtml(name, ts)).join("")
+          : `<p class="muted">No clients match.</p>`)
       : `<p class="muted">Nothing assigned to you right now.</p>`) +
-    `<h2>My recently done</h2>
-     <table class="grid"><thead><tr><th>Task</th><th>Client</th><th>Done</th><th>Note</th></tr></thead>
-     <tbody>${doneMine.map((t) => `<tr><td>${esc(t.title)}</td>
-        <td>${esc(t.client?.dsp_name)}</td><td>${fmtDate(t.done_date)}</td>
-        <td class="notes-cell">${latestNote(t)}</td></tr>`).join("")
-        || `<tr><td colspan="4" class="muted">nothing yet</td></tr>`}</tbody></table>`;
+    `<details class="cgroup">
+       <summary><b>My recently done (${doneMine.length})</b></summary>
+       <table class="grid"><thead><tr><th>Task</th><th>Client</th><th>Done</th><th>Note</th></tr></thead>
+       <tbody>${doneMine.map((t) => `<tr><td>${esc(t.title)}</td>
+          <td>${esc(t.client?.dsp_name)}</td><td>${fmtDate(t.done_date)}</td>
+          <td class="notes-cell">${latestNote(t)}</td></tr>`).join("")
+          || `<tr><td colspan="4" class="muted">nothing yet</td></tr>`}</tbody></table>
+     </details>`;
+
+  view.querySelectorAll("details.cgroup").forEach((d) => {
+    d.ontoggle = () => { const k = d.dataset.client; if (!k) return; if (d.open) myItemsExpanded.add(k); else myItemsExpanded.delete(k); };
+  });
+
+  $("#mi-q").oninput = (e) => { myItemsQuery = e.target.value.trim().toLowerCase(); Views.renderMyItems(view); };
+  if (myItemsQuery) {
+    const q = $("#mi-q");
+    q.focus();
+    q.setSelectionRange(q.value.length, q.value.length);
+  }
 
   view.querySelectorAll("tr[data-task]").forEach((r) => {
     const tid = Number(r.dataset.task);
