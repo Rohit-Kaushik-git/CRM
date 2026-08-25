@@ -28,18 +28,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 ONBOARDING_COLS = {
     "Company Setup": "Company Setup",
-    "Federal/State Withholding/payment": "Federal/State Withholding & Payment",
-    "Data Transfer (Paycom)": "Data Transfer",
-    "Data Transfer (ADP)": "Data Transfer",
-    "Delta Data Upload": "Delta Data Upload",
+    "Federal/State Withholding/payment": "Federal/State Withholding",
     "Time Tracking Setup Kiosk/Mobile/Web Enablement": "Time Tracking Setup (Kiosk/Mobile/Web)",
-    "Document Transfer": "Document Transfer",
-    "Historical Data": "Historical Data Download",
-    "Audit Client Data and Minor Data Corrections": "Audit Client Data & Minor Corrections",
-    "Final Payroll Review and Testing": "Final Payroll Review & Testing",
     "Prior Pay Info Transfer and Approved": "Prior Pay Info Transfer & Approval",
+    "Historical Data": "Historical Data Download",
+    "Tax Review (Post Prior Upload)": "Tax Review",
     "PTO Balance Move": "PTO Balance Move",
-    "Tax Review (Post Prior Upload)": "Tax Review (Post Prior Upload)",
+    "Document Transfer": "Document Transfer",
 }
 AUDIT_COLS = {
     "Census Audit": "Census Audit",
@@ -185,7 +180,9 @@ def main(argv=None):
         client = {
             "dsp_name": row["DSP Name"],
             "short_code": row.get("DSP Short Code", ""),
-            "vendor": "ADP" if "adp" in prev_system else ("Paycom" if "paycom" in prev_system else None),
+            "vendor": ("ADP" if "adp" in prev_system
+                       else "Paycom" if "paycom" in prev_system
+                       else "New" if "new" in prev_system else None),
             "previous_system": row.get("Previous System") or None,
             "status": client_status(row.get("Final Status", "")),
             "tt_live_date": iso(actual or expected),
@@ -216,20 +213,12 @@ def main(argv=None):
         task_by_tpl = {t["template_id"]: t for t in tasks}
         last_checked = parse_date(arow.get("Last Checked", ""))
 
-        # Both vendor-specific Data Transfer columns map to one template; when both
-        # are filled, keep only the vendor-matching one so sequential PATCHes don't
-        # flip the status back and forth on every run.
-        if row.get("Data Transfer (Paycom)") and row.get("Data Transfer (ADP)"):
-            row = dict(row)
-            loser = "Data Transfer (ADP)" if client["vendor"] == "Paycom" else "Data Transfer (Paycom)"
-            row[loser] = ""
-
         for cols, src in ((ONBOARDING_COLS, row), (AUDIT_COLS, arow)):
             for col, tpl_name in cols.items():
                 if col not in src:
                     continue
                 cell = src.get(col, "")
-                if not cell and col.startswith("Data Transfer ("):
+                if not cell:
                     continue
                 if cols is AUDIT_COLS:
                     status, done, note = parse_audit_cell(cell)
