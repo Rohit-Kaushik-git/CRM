@@ -115,7 +115,11 @@ def read_rows(filename, required_cols, key_col="DSP Name"):
         sys.exit(f"{filename}: expected columns missing: {missing}")
     out = []
     for r in rows[hi + 1:]:
-        d = {headers[i]: (r[i].strip() if i < len(r) else "") for i in range(len(headers))}
+        d = {}
+        for i, name in enumerate(headers):
+            if name in d:  # sheets can carry duplicate (empty) header names — first wins
+                continue
+            d[name] = r[i].strip() if i < len(r) else ""
         if d.get(key_col):
             out.append(d)
     return out
@@ -179,7 +183,8 @@ def main(argv=None):
     fetch_csvs(conf, local_only)
 
     onboarding = read_rows("onboarding.csv",
-                           ["DSP Name", "Expected Time Tracking Live Date", "Implementor"])
+                           ["DSP Name", "Expected Time Tracking Live Date", "Implementor",
+                            "RAG", "Final Status", "High Level Status", "Benefits Details"])
     audit = read_rows("audit.csv", ["Client", "Census Audit", "Last Checked"], key_col="Client")
     audit_by_name = {r["Client"].upper(): r for r in audit}
 

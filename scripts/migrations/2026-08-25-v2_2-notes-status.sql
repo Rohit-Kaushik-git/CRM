@@ -45,3 +45,5 @@ create trigger client_note_activity after insert on client_notes
 for each row execute function public.log_client_note_insert();
 
 commit;
+
+notify pgrst, 'reload schema';

@@ -1,7 +1,7 @@
 -- DSP CRM Tracker schema. Run once in the Supabase SQL editor.
 -- Re-runnable: drops and recreates everything (destroys data — fine pre-launch).
 
-drop table if exists activity_log, task_notes, tasks, task_templates, client_modules, clients, users, app_config cascade;
+drop table if exists client_notes, activity_log, task_notes, tasks, task_templates, client_modules, clients, users, app_config cascade;
 drop function if exists public.handle_new_user() cascade;
 drop function if exists public.seed_client_tasks() cascade;
 

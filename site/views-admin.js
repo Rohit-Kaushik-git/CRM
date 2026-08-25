@@ -116,7 +116,7 @@ Views.renderToday = async (view) => {
       <td><b>${countdownLabel(daysUntil(c.tt_live_date))}</b></td>
       <td>${open} open task${open === 1 ? "" : "s"}</td></tr>`).join("");
   const riskRows = atRisk.map((c) => `<tr>
-      <td>${clientLink(c)}</td><td><span class="rag rag-${c.rag}"></span> ${c.rag}</td>
+      <td>${clientLink(c)}</td><td><span class="rag rag-${c.rag || "none"}"></span> ${esc(c.rag || "—")}</td>
       <td>${clientStatusPill(c.status)}</td><td>${fmtDate(c.tt_live_date)}</td>
       <td>${esc(c.implementor?.name || "—")}</td></tr>`).join("");
   const gapRows = auditGap.map((c) => {
