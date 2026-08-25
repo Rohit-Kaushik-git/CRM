@@ -76,7 +76,7 @@ Views.renderToday = async (view) => {
   const openish = (t) => t.status === "Open" || t.status === "In Progress";
   const now = new Date();  // local date, not UTC — must agree with daysUntil()'s day boundary
   const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  const allTasks = active.flatMap((c) => (c.tasks || []).map((t) => ({ ...t, _client: c })));
+  const allTasks = active.flatMap((c) => (c.tasks || []).map((t) => ({ ...t, _client: c, client: c })));
 
   const soon = active
     .filter((c) => { const d = daysUntil(c.tt_live_date); return d !== null && d >= 0 && d <= LIVE_SOON_DAYS; })
@@ -84,10 +84,10 @@ Views.renderToday = async (view) => {
   const overdue = allTasks
     .filter((t) => openish(t) && t.due_date && t.due_date < todayIso)
     .sort((a, b) => a.due_date.localeCompare(b.due_date));
-  const unowned = allTasks.filter((t) => {
-    const d = daysUntil(t._client.tt_live_date);
-    return openish(t) && !t.assignee_id && d !== null && d >= 0 && d <= UNOWNED_WINDOW_DAYS;
-  });
+  const unowned = active.filter((c) => {
+    const d = daysUntil(c.tt_live_date);
+    return !c.implementor_id && d !== null && d >= 0 && d <= UNOWNED_WINDOW_DAYS;
+  }).map((c) => ({ c, open: (c.tasks || []).filter(openish).length }));
   const atRisk = active.filter((c) => c.rag === "R" || c.rag === "A");
   const auditGap = soon.filter((c) =>
     (c.tasks || []).some((t) => t.template?.phase === "audit" && openish(t)));
@@ -105,17 +105,18 @@ Views.renderToday = async (view) => {
       <td>${clientLink(c)}</td><td><b>${countdownLabel(daysUntil(c.tt_live_date))}</b></td>
       <td>${fmtDate(c.tt_live_date)}</td><td>${esc(c.implementor?.name || "—")}</td>
       <td><span class="bar"><span style="width:${pct(c.tasks)}%"></span></span> ${pct(c.tasks)}%</td>
-      <td><span class="rag rag-${c.rag || "none"}"></span> ${esc(c.status)}</td></tr>`).join("");
+      <td>${clientStatusPill(c.status)}</td></tr>`).join("");
   const overdueRows = overdue.map((t) => `<tr>
       <td>${clientLink(t._client)}</td><td>${esc(t.title)}</td>
-      <td>${esc(t.assignee?.name || "Unassigned")}</td><td>${fmtDate(t.due_date)}</td>
-      <td>${t.status}</td></tr>`).join("");
-  const unownedRows = unowned.map((t) => `<tr>
-      <td>${clientLink(t._client)}</td><td>${esc(t.title)}</td>
-      <td>${countdownLabel(daysUntil(t._client.tt_live_date))}</td></tr>`).join("");
+      <td>${esc(taskOwnerLabel(t))}</td><td class="overdue">${fmtDate(t.due_date)}</td>
+      <td>${statusPill(t.status)}</td></tr>`).join("");
+  const unownedRows = unowned.map(({ c, open }) => `<tr>
+      <td>${clientLink(c)}</td>
+      <td><b>${countdownLabel(daysUntil(c.tt_live_date))}</b></td>
+      <td>${open} open task${open === 1 ? "" : "s"}</td></tr>`).join("");
   const riskRows = atRisk.map((c) => `<tr>
       <td>${clientLink(c)}</td><td><span class="rag rag-${c.rag}"></span> ${c.rag}</td>
-      <td>${esc(c.status)}</td><td>${fmtDate(c.tt_live_date)}</td>
+      <td>${clientStatusPill(c.status)}</td><td>${fmtDate(c.tt_live_date)}</td>
       <td>${esc(c.implementor?.name || "—")}</td></tr>`).join("");
   const gapRows = auditGap.map((c) => {
     const openAudit = (c.tasks || []).filter((t) => t.template?.phase === "audit" && openish(t));
@@ -139,8 +140,8 @@ Views.renderToday = async (view) => {
       table(`<th>Client</th><th>Countdown</th><th>TT live</th><th>Implementor</th><th>Checklist</th><th>Status</th>`, soonRows)) +
     section("Overdue", overdue.length,
       table(`<th>Client</th><th>Task</th><th>Owner</th><th>Due</th><th>Status</th>`, overdueRows)) +
-    section(`Unowned work (go-live ≤ ${UNOWNED_WINDOW_DAYS}d)`, unowned.length,
-      table(`<th>Client</th><th>Task</th><th>Go-live</th>`, unownedRows)) +
+    section(`No implementor (go-live ≤ ${UNOWNED_WINDOW_DAYS}d)`, unowned.length,
+      table(`<th>Client</th><th>Go-live</th><th>Open work</th>`, unownedRows)) +
     section("At risk (RAG)", atRisk.length,
       table(`<th>Client</th><th>RAG</th><th>Status</th><th>TT live</th><th>Implementor</th>`, riskRows)) +
     section("Audit gaps before go-live", auditGap.length,
@@ -223,7 +224,7 @@ Views.renderClientDetail = async (view, id) => {
   const me = Store.getMe();
   const isAdmin = me.role === "admin";
   const dis = isAdmin ? "" : "disabled";
-  const [c, users, activity] = await Promise.all([Store.getClient(id), Store.listUsers(), Store.getActivity(id)]);
+  const [c, users, activity, teams] = await Promise.all([Store.getClient(id), Store.listUsers(), Store.getActivity(id), Store.getTeams()]);
   const active = users.filter((u) => u.active);
   const userOpts = (sel) => `<option value="">Unassigned</option>` + active.map((u) =>
     `<option value="${u.id}" ${u.id === sel ? "selected" : ""}>${esc(u.name)}</option>`).join("");
@@ -231,23 +232,34 @@ Views.renderClientDetail = async (view, id) => {
     .filter((t) => (t.template ? t.template.phase === phase : phase === "onboarding"))
     .sort((a, b) => (a.template?.sort_order ?? 999) - (b.template?.sort_order ?? 999) || a.id - b.id);
 
+  const myEmail = (me.email || "").toLowerCase();
+  const myTeams = Object.entries(teams).filter(([, list]) => list.includes(myEmail)).map(([t]) => t);
+  const canWork = (t) => {
+    if (isAdmin) return true;
+    const team = t.template?.owner_team;
+    if (!team || team === "Implementor") return c.implementor_id === me.id;
+    return myTeams.includes(team);
+  };
+
+  const todayIsoLocal = (() => { const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; })();
   const taskRow = (t) => {
-    const canEdit = isAdmin || t.assignee_id === me.id;
+    const editable = canWork(t);
     const notes = (t.task_notes || []).slice().sort((a, b) => b.created_at.localeCompare(a.created_at));
     const noteLine = (n) =>
       `<div class="note">"${esc(n.note)}" — ${esc(n.author?.name || "sync")}, ${n.created_at.slice(0, 10)}</div>`;
+    const due = !t.template_id && t.due_date
+      ? ` <span class="${t.due_date < todayIsoLocal && t.status !== "Done" ? "overdue" : "muted"}">due ${t.due_date}</span>` : "";
+    const selCls = { "Done": "sel-done", "In Progress": "sel-inprogress", "N/A": "sel-na" }[t.status] || "";
     return `<tr data-task="${t.id}">
-      <td>${esc(t.title)}${t.template_id ? "" : ` <span class="chip">ad-hoc</span>`}</td>
-      <td><select class="t-assignee" ${dis}>${userOpts(t.assignee_id)}</select></td>
-      <td><input type="date" class="t-due" value="${t.due_date || ""}" ${dis}></td>
-      <td><select class="t-status" ${canEdit ? "" : "disabled"}>
-        ${STATUS_OPTS.map((s) => `<option ${s === t.status ? "selected" : ""}>${s}</option>`).join("")}
-      </select></td>
+      <td>${esc(t.title)}${t.template_id ? ownerTag(t) : ` <span class="chip">ad-hoc</span>`}${due}</td>
+      <td>${editable
+        ? `<select class="t-status ${selCls}">${STATUS_OPTS.map((s) => `<option ${s === t.status ? "selected" : ""}>${s}</option>`).join("")}</select>`
+        : statusPill(t.status)}</td>
       <td class="notes-cell">
         ${notes.length ? noteLine(notes[0]) : `<span class="muted">no notes</span>`}
-        ${notes.length > 1 ? `<details><summary class="muted">${notes.length - 1} more</summary>
-          ${notes.slice(1).map(noteLine).join("")}</details>` : ""}
-        ${canEdit ? `<button class="t-note small secondary" type="button">+ note</button>` : ""}
+        ${notes.length > 1 ? `<details><summary class="muted">${notes.length - 1} more</summary>${notes.slice(1).map(noteLine).join("")}</details>` : ""}
+        ${editable ? `<button class="t-note small secondary" type="button">+ note</button>` : ""}
       </td></tr>`;
   };
 
@@ -277,8 +289,8 @@ Views.renderClientDetail = async (view, id) => {
       <label>RAG <select id="c-rag" ${dis}>
         ${["", "G", "A", "R"].map((r) => `<option value="${r}" ${r === (c.rag || "") ? "selected" : ""}>${r || "—"}</option>`).join("")}
       </select></label>
-      <label>Vendor <select id="c-vendor" ${dis}>
-        ${["", "ADP", "Paycom"].map((v) => `<option value="${v}" ${v === (c.vendor || "") ? "selected" : ""}>${v || "—"}</option>`).join("")}
+      <label>Previous System <select id="c-vendor" ${dis}>
+        ${["", "ADP", "Paycom", "New"].map((v) => `<option value="${v}" ${v === (c.vendor || "") ? "selected" : ""}>${v || "—"}</option>`).join("")}
       </select></label>
       <label>Implementor <select id="c-imp" ${dis}>${userOpts(c.implementor_id)}</select></label>
       <label>TT live <input id="c-tt" type="date" value="${c.tt_live_date || ""}" ${dis}></label>
@@ -292,14 +304,13 @@ Views.renderClientDetail = async (view, id) => {
         .sort((a, b) => CONFIG.MODULES.indexOf(a.module) - CONFIG.MODULES.indexOf(b.module))
         .map(moduleRow).join("")}</tbody></table>
     </div>
-    <div class="tabbar">
+    ${isMigrating(c) ? `<div class="tabbar">
       <button id="tab-onb" class="active" type="button">Onboarding (${tasksFor("onboarding").length})</button>
       <button id="tab-aud" type="button">Audit (${tasksFor("audit").length})</button>
-    </div>
+    </div>` : ""}
     <div id="task-area"></div>
     ${isAdmin ? `<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
       <input id="adhoc-title" placeholder="Ad-hoc task title" style="flex:1;min-width:180px">
-      <select id="adhoc-assignee">${userOpts(null)}</select>
       <input id="adhoc-due" type="date">
       <button id="adhoc-add" type="button">Add task</button>
     </div>` : ""}
@@ -314,33 +325,16 @@ Views.renderClientDetail = async (view, id) => {
   const reload = () => Views.renderClientDetail(view, id);
 
   const renderTasks = (phase) => {
-    $("#tab-onb").classList.toggle("active", phase === "onboarding");
-    $("#tab-aud").classList.toggle("active", phase === "audit");
+    const tb = $("#tab-onb"); if (tb) tb.classList.toggle("active", phase === "onboarding");
+    const ta = $("#tab-aud"); if (ta) ta.classList.toggle("active", phase === "audit");
     $("#task-area").innerHTML = `<table class="grid"><thead><tr>
-      <th>Task</th><th>Assignee</th><th>Due</th><th>Status</th><th>Notes</th></tr></thead>
+      <th>Task</th><th>Status</th><th>Notes</th></tr></thead>
       <tbody>${tasksFor(phase).map(taskRow).join("")}</tbody></table>`;
     $("#task-area").querySelectorAll("tr[data-task]").forEach((row) => {
       const tid = Number(row.dataset.task);
       const t = c.tasks.find((x) => x.id === tid);
-      const asg = row.querySelector(".t-assignee");
-      if (!asg.disabled) asg.onchange = () => {
-        const prev = t.assignee_id;
-        const who = asg.options[asg.selectedIndex].text;
-        saveChange(`${t.title} → ${asg.value ? "assigned to " + who : "unassigned"}`,
-          () => Store.updateTask(tid, { assignee_id: asg.value || null }),
-          () => Store.updateTask(tid, { assignee_id: prev }),
-          reload);
-      };
-      const due = row.querySelector(".t-due");
-      if (!due.disabled) due.onchange = () => {
-        const prev = t.due_date;
-        saveChange(`${t.title} → due ${due.value || "—"}`,
-          () => Store.updateTask(tid, { due_date: due.value || null }),
-          () => Store.updateTask(tid, { due_date: prev }),
-          reload);
-      };
       const st = row.querySelector(".t-status");
-      if (!st.disabled) st.onchange = () => guard(async () => {
+      if (st) st.onchange = () => guard(async () => {
         const prevStatus = t.status, prevDone = t.done_date;
         if (st.value === "Done") {
           const note = prompt("Completion note (required):");
@@ -369,8 +363,8 @@ Views.renderClientDetail = async (view, id) => {
       });
     });
   };
-  $("#tab-onb").onclick = () => renderTasks("onboarding");
-  $("#tab-aud").onclick = () => renderTasks("audit");
+  const tabOnb = $("#tab-onb"); if (tabOnb) tabOnb.onclick = () => renderTasks("onboarding");
+  const tabAud = $("#tab-aud"); if (tabAud) tabAud.onclick = () => renderTasks("audit");
   renderTasks("onboarding");
 
   if (isAdmin) {
@@ -416,7 +410,6 @@ Views.renderClientDetail = async (view, id) => {
       if (!title) { toast("Task title required"); return; }
       await Store.createTask({
         client_id: id, title,
-        assignee_id: $("#adhoc-assignee").value || null,
         due_date: $("#adhoc-due").value || null,
       });
       toast("Task added", true);
@@ -426,31 +419,32 @@ Views.renderClientDetail = async (view, id) => {
 };
 
 Views.renderOpenItems = async (view) => {
-  const [open, done] = await Promise.all([Store.listOpenItems(), Store.listDoneItems()]);
+  const [open, done] = await Promise.all([Store.listOpenTasks(), Store.listDoneTasks()]);
   const groups = {};
-  open.forEach((t) => {
-    const k = t.assignee?.name || "Unassigned";
-    (groups[k] = groups[k] || []).push(t);
-  });
+  open.forEach((t) => { const k = taskOwnerLabel(t); (groups[k] = groups[k] || []).push(t); });
   const openRow = (t) => `<tr>
     <td><a href="#client/${t.client_id}">${esc(t.client?.dsp_name)}</a></td>
-    <td>${esc(t.title)}</td><td>${t.status}</td><td>${fmtDate(t.due_date)}</td>
+    <td>${esc(t.title)}${ownerTag(t)}</td>
+    <td>${statusPill(t.status)}</td>
     <td class="notes-cell">${latestNote(t)}</td></tr>`;
   const doneRow = (t) => `<tr>
     <td><a href="#client/${t.client_id}">${esc(t.client?.dsp_name)}</a></td>
-    <td>${esc(t.title)}</td><td>${esc(t.assignee?.name || "—")}</td>
-    <td>${fmtDate(t.done_date)}</td><td class="notes-cell">${latestNote(t)}</td></tr>`;
+    <td>${esc(t.title)}</td>
+    <td>${esc(taskOwnerLabel(t))}</td>
+    <td>${fmtDate(t.done_date)}</td>
+    <td class="notes-cell">${latestNote(t)}</td></tr>`;
+  const order = Object.keys(groups).sort();
   view.innerHTML = `<div class="page-head"><h1>Open Items</h1>
-      <span class="muted">${open.length} open across ${Object.keys(groups).length} people</span></div>` +
-    (open.length ? Object.entries(groups).map(([who, ts]) => `
-      <h2>${esc(who)} <span class="muted">(${ts.length})</span></h2>
+      <span class="muted">${open.length} open across ${order.length} owners</span></div>` +
+    (open.length ? order.map((who) => `
+      <h2>${esc(who)} <span class="muted">(${groups[who].length})</span></h2>
       <table class="grid"><thead><tr>
-        <th>Client</th><th>Task</th><th>Status</th><th>Due</th><th>Latest note</th></tr></thead>
-      <tbody>${ts.map(openRow).join("")}</tbody></table>`).join("")
-      : `<p class="muted">Nothing open — all assigned work is done.</p>`) +
+        <th>Client</th><th>Task</th><th>Status</th><th>Latest note</th></tr></thead>
+      <tbody>${groups[who].map(openRow).join("")}</tbody></table>`).join("")
+      : `<p class="muted">Nothing open — all work is done.</p>`) +
     `<h2>Recently done <span class="muted">(last ${done.length})</span></h2>
      <table class="grid"><thead><tr>
-       <th>Client</th><th>Task</th><th>By</th><th>Done</th><th>Note</th></tr></thead>
+       <th>Client</th><th>Task</th><th>Owner</th><th>Done</th><th>Note</th></tr></thead>
      <tbody>${done.map(doneRow).join("") || `<tr><td colspan="5" class="muted">nothing yet</td></tr>`}</tbody></table>`;
 };
 Views.renderTeam = async (view) => {

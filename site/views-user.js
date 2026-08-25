@@ -3,14 +3,25 @@ window.Views = window.Views || {};
 
 Views.renderMyItems = async (view) => {
   const me = Store.getMe();
-  const [items, done] = await Promise.all([Store.listOpenItems(me.id), Store.listDoneItems(me.id)]);
+  const [open, done, teams] = await Promise.all([
+    Store.listOpenTasks(), Store.listDoneTasks(), Store.getTeams(),
+  ]);
+  const myEmail = (me.email || "").toLowerCase();
+  const myTeams = Object.entries(teams).filter(([, l]) => l.includes(myEmail)).map(([t]) => t);
+  const isMine = (t) => {
+    const team = t.template?.owner_team;
+    if (!team || team === "Implementor") return t.client?.implementor_id === me.id;
+    return myTeams.includes(team);
+  };
+  const items = open.filter(isMine);
+  const doneMine = done.filter(isMine);
   const byClient = {};
   items.forEach((t) => {
     const k = t.client?.dsp_name || "?";
     (byClient[k] = byClient[k] || []).push(t);
   });
   const row = (t) => `<tr data-task="${t.id}">
-    <td>${esc(t.title)}</td><td>${t.status}</td><td>${fmtDate(t.due_date)}</td>
+    <td>${esc(t.title)}</td><td>${statusPill(t.status)}</td><td>${fmtDate(t.due_date)}</td>
     <td class="notes-cell">${latestNote(t)}</td>
     <td>
       ${t.status === "Open" ? `<button class="t-start small secondary" type="button">Start</button>` : ""}
@@ -27,7 +38,7 @@ Views.renderMyItems = async (view) => {
       : `<p class="muted">Nothing assigned to you right now.</p>`) +
     `<h2>My recently done</h2>
      <table class="grid"><thead><tr><th>Task</th><th>Client</th><th>Done</th><th>Note</th></tr></thead>
-     <tbody>${done.map((t) => `<tr><td>${esc(t.title)}</td>
+     <tbody>${doneMine.map((t) => `<tr><td>${esc(t.title)}</td>
         <td>${esc(t.client?.dsp_name)}</td><td>${fmtDate(t.done_date)}</td>
         <td class="notes-cell">${latestNote(t)}</td></tr>`).join("")
         || `<tr><td colspan="4" class="muted">nothing yet</td></tr>`}</tbody></table>`;
