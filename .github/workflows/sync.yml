@@ -1,0 +1,21 @@
+name: sheet-sync
+on:
+  schedule:
+    - cron: "0 */2 * * *"   # every 2 hours (UTC)
+  workflow_dispatch: {}      # manual "Run workflow" button
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run sheet sync
+        run: python scripts/sync_sheets.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SHEET_ONBOARDING_CSV_URL: ${{ secrets.SHEET_ONBOARDING_CSV_URL }}
+          SHEET_AUDIT_CSV_URL: ${{ secrets.SHEET_AUDIT_CSV_URL }}
