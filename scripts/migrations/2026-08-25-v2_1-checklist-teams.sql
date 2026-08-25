@@ -3,7 +3,14 @@
 begin;
 
 -- vendor gains 'New' ("previous system" semantics)
-alter table clients drop constraint if exists clients_vendor_check;
+do $drop$
+declare c text;
+begin
+  select conname into c from pg_constraint
+   where conrelid = 'clients'::regclass and contype = 'c'
+     and pg_get_constraintdef(oid) like '%vendor%';
+  if c is not null then execute format('alter table clients drop constraint %I', c); end if;
+end $drop$;
 alter table clients add constraint clients_vendor_check
   check (vendor in ('ADP','Paycom','New'));
 
@@ -104,5 +111,27 @@ end $$;
 drop trigger if exists client_vendor_rules on clients;
 create trigger client_vendor_rules after update on clients
 for each row execute function public.apply_vendor_checklist_rules();
+
+-- fix: cascaded trigger updates (e.g. vendor-change auto-flips) must NOT stamp app_touched
+create or replace function public.log_task_changes()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare who text;
+begin
+  if new.status is distinct from old.status then
+    insert into activity_log (client_id, task_id, actor_id, action, detail)
+    values (new.client_id, new.id, auth.uid(), 'status',
+            new.title || ': ' || old.status || ' → ' || new.status);
+  end if;
+  if new.assignee_id is distinct from old.assignee_id then
+    select name into who from users where id = new.assignee_id;
+    insert into activity_log (client_id, task_id, actor_id, action, detail)
+    values (new.client_id, new.id, auth.uid(), 'assigned',
+            new.title || ' → ' || coalesce(who, 'unassigned'));
+  end if;
+  if auth.uid() is not null and pg_trigger_depth() = 1 then
+    new.app_touched := true;  -- direct human write only
+  end if;
+  return new;
+end $$;
 
 commit;

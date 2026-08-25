@@ -194,8 +194,8 @@ begin
     values (new.client_id, new.id, auth.uid(), 'assigned',
             new.title || ' → ' || coalesce(who, 'unassigned'));
   end if;
-  if auth.uid() is not null then
-    new.app_touched := true;
+  if auth.uid() is not null and pg_trigger_depth() = 1 then
+    new.app_touched := true;  -- direct human write only; cascaded trigger updates don't count
   end if;
   return new;
 end $$;
