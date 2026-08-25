@@ -110,3 +110,7 @@ h2 { margin-top: 22px; }
 select.sel-done { background: #e2f4e8; }
 select.sel-inprogress { background: #fdf3d7; }
 select.sel-na { background: #f4f4f4; color: #a6adb5; }
+
+.pill-cancelled { background: #fbe3e7; color: #a4243b; }
+.pill-onhold { background: #fdf3d7; color: #8a6d00; }
+.pill-unresponsive { background: #ece4f6; color: #6b34a8; }

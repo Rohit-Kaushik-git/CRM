@@ -85,6 +85,7 @@ window.Store = (() => {
   async function getClient(id) {
     const { data, error } = await sb.from("clients")
       .select(`*, implementor:users(name), client_modules(*),
+               client_notes(*, author:users(name)),
                tasks(*, template:task_templates(phase,sort_order,owner_team), assignee:users!tasks_assignee_id_fkey(name),
                      task_notes(note,created_at,author:users(name)))`)
       .eq("id", id).single();
@@ -120,6 +121,12 @@ window.Store = (() => {
 
   async function addNote(taskId, note) {
     const { error } = await sb.from("task_notes").insert({ task_id: taskId, author_id: me.id, note });
+    if (error) fail(error);
+  }
+
+  async function addClientNote(clientId, scope, note) {
+    const { error } = await sb.from("client_notes")
+      .insert({ client_id: clientId, scope, author_id: me.id, note });
     if (error) fail(error);
   }
 
@@ -174,6 +181,6 @@ window.Store = (() => {
 
   return { signUp, signIn, signOut, loadMe, getMe, resetPassword, updatePassword, onPasswordRecovery, listUsers, updateUser,
            getAdminEmails, setAdminEmails, listClients, getClient, createClient,
-           updateClient, updateModule, createTask, updateTask, addNote,
+           updateClient, updateModule, createTask, updateTask, addNote, addClientNote,
            listOpenTasks, listDoneTasks, getTeams, listLastActivity, getActivity };
 })();

@@ -2,7 +2,7 @@
 window.Views = window.Views || {};
 
 const STATUS_OPTS = ["Open", "In Progress", "Done", "N/A"];
-const CLIENT_STATUS_OPTS = ["Not Started", "In Progress", "Live", "Completed"];
+const CLIENT_STATUS_OPTS = ["Not Started", "In Progress", "Live", "Completed", "Cancelled", "On Hold", "Unresponsive"];
 
 function pct(tasks) {
   if (!tasks || !tasks.length) return 0;
@@ -17,7 +17,8 @@ function statusPill(s) {
 }
 function clientStatusPill(s) {
   const cls = { "Not Started": "pill-notstarted", "In Progress": "pill-progress",
-                "Live": "pill-live", "Completed": "pill-completed" }[s] || "pill-open";
+                "Live": "pill-live", "Completed": "pill-completed",
+                "Cancelled": "pill-cancelled", "On Hold": "pill-onhold", "Unresponsive": "pill-unresponsive" }[s] || "pill-open";
   return `<span class="pill ${cls}">${esc(s)}</span>`;
 }
 function ownerTag(t) {
@@ -72,7 +73,7 @@ function wireClientRows(view) {
 Views.renderToday = async (view) => {
   const [clients, lastAct] = await Promise.all([Store.listClients(), Store.listLastActivity()]);
   const lastByClient = Object.fromEntries(lastAct.map((r) => [r.client_id, r.last_activity]));
-  const active = clients.filter((c) => c.status !== "Completed");
+  const active = clients.filter((c) => c.status !== "Completed" && c.status !== "Cancelled");
   const openish = (t) => t.status === "Open" || t.status === "In Progress";
   const now = new Date();  // local date, not UTC — must agree with daysUntil()'s day boundary
   const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -88,7 +89,7 @@ Views.renderToday = async (view) => {
     const d = daysUntil(c.tt_live_date);
     return !c.implementor_id && d !== null && d >= 0 && d <= UNOWNED_WINDOW_DAYS;
   }).map((c) => ({ c, open: (c.tasks || []).filter(openish).length }));
-  const atRisk = active.filter((c) => c.rag === "R" || c.rag === "A");
+  const atRisk = active.filter((c) => c.rag === "R" || c.rag === "A" || c.status === "On Hold" || c.status === "Unresponsive");
   const auditGap = soon.filter((c) =>
     (c.tasks || []).some((t) => t.template?.phase === "audit" && openish(t)));
   const stale = active.filter((c) => {
@@ -142,7 +143,7 @@ Views.renderToday = async (view) => {
       table(`<th>Client</th><th>Task</th><th>Owner</th><th>Due</th><th>Status</th>`, overdueRows)) +
     section(`No implementor (go-live ≤ ${UNOWNED_WINDOW_DAYS}d)`, unowned.length,
       table(`<th>Client</th><th>Go-live</th><th>Open work</th>`, unownedRows)) +
-    section("At risk (RAG)", atRisk.length,
+    section("At risk / stalled", atRisk.length,
       table(`<th>Client</th><th>RAG</th><th>Status</th><th>TT live</th><th>Implementor</th>`, riskRows)) +
     section("Audit gaps before go-live", auditGap.length,
       table(`<th>Client</th><th>Countdown</th><th>Open audit items</th>`, gapRows)) +
@@ -253,6 +254,9 @@ Views.renderClientDetail = async (view, id) => {
     const selCls = { "Done": "sel-done", "In Progress": "sel-inprogress", "N/A": "sel-na" }[t.status] || "";
     return `<tr data-task="${t.id}">
       <td>${esc(t.title)}${t.template_id ? ownerTag(t) : ` <span class="chip">ad-hoc</span>`}${due}</td>
+      <td>${(() => { const team = t.template?.owner_team;
+        if (!team || team === "Implementor") return esc(c.implementor?.name || "Unassigned");
+        return esc(team); })()}</td>
       <td>${editable
         ? `<select class="t-status ${selCls}">${STATUS_OPTS.map((s) => `<option ${s === t.status ? "selected" : ""}>${s}</option>`).join("")}</select>`
         : statusPill(t.status)}</td>
@@ -263,11 +267,20 @@ Views.renderClientDetail = async (view, id) => {
       </td></tr>`;
   };
 
-  const moduleRow = (m) => `<tr data-mod="${m.id}">
+  const modNotes = (mod) => (c.client_notes || [])
+    .filter((n) => n.scope === mod)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const moduleRow = (m) => { const notes = modNotes(m.module); const latest = notes[0];
+    return `<tr data-mod="${m.id}" data-module="${m.module}">
     <td>${m.module}</td>
     <td><input type="checkbox" class="m-opted" ${m.opted ? "checked" : ""} ${dis}></td>
     <td><input type="checkbox" class="m-training" ${m.training_done ? "checked" : ""} ${dis}></td>
-    <td><input type="date" class="m-date" value="${m.training_date || ""}" ${dis}></td></tr>`;
+    <td><input type="date" class="m-date" value="${m.training_date || ""}" ${dis}></td>
+    <td class="notes-cell">
+      ${latest ? `<div class="note">"${esc(latest.note)}" — ${esc(latest.author?.name || "sync")}, ${latest.created_at.slice(0, 10)}</div>` : `<span class="muted">no notes</span>`}
+      ${notes.length > 1 ? `<details><summary class="muted">${notes.length - 1} more</summary>${notes.slice(1).map((n) => `<div class="note">"${esc(n.note)}" — ${esc(n.author?.name || "sync")}, ${n.created_at.slice(0, 10)}</div>`).join("")}</details>` : ""}
+      <button class="m-note small secondary" type="button">+ note</button>
+    </td></tr>`; };
 
   view.innerHTML = `
     <div class="page-head">
@@ -299,10 +312,21 @@ Views.renderClientDetail = async (view, id) => {
     </div>
     <div class="card">
       <h2 style="margin-top:0">Modules &amp; training</h2>
-      <table class="grid"><thead><tr><th>Module</th><th>Opted</th><th>Training done</th><th>Training date</th></tr></thead>
+      <table class="grid"><thead><tr><th>Module</th><th>Opted</th><th>Training done</th><th>Training date</th><th>Notes</th></tr></thead>
       <tbody>${c.client_modules.slice()
         .sort((a, b) => CONFIG.MODULES.indexOf(a.module) - CONFIG.MODULES.indexOf(b.module))
         .map(moduleRow).join("")}</tbody></table>
+    </div>
+    <div class="card">
+      <h2 style="margin-top:0">Company notes</h2>
+      <div id="company-notes">
+      ${(() => { const notes = modNotes("Company");
+        return notes.length ? notes.map((n) => `<div class="act-row"><span class="when">${n.created_at.slice(0, 10)}</span> <b>${esc(n.author?.name || "sync")}</b> ${esc(n.note)}</div>`).join("") : `<p class="muted">No company notes yet.</p>`; })()}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <input id="company-note-input" placeholder="Add a company-level note…" style="flex:1">
+        <button id="company-note-add" type="button">Add</button>
+      </div>
     </div>
     ${isMigrating(c) ? `<div class="tabbar">
       <button id="tab-onb" class="active" type="button">Onboarding (${tasksFor("onboarding").length})</button>
@@ -324,11 +348,27 @@ Views.renderClientDetail = async (view, id) => {
 
   const reload = () => Views.renderClientDetail(view, id);
 
+  view.querySelectorAll("tr[data-mod] .m-note").forEach((btn) => {
+    btn.onclick = () => guard(async () => {
+      const scope = btn.closest("tr").dataset.module;
+      const note = prompt(`${scope} note:`);
+      if (note && note.trim()) { await Store.addClientNote(id, scope, note.trim()); toast("Note added", true); reload(); }
+    });
+  });
+
+  $("#company-note-add").onclick = () => guard(async () => {
+    const note = $("#company-note-input").value.trim();
+    if (!note) return;
+    await Store.addClientNote(id, "Company", note);
+    toast("Note added", true);
+    reload();
+  });
+
   const renderTasks = (phase) => {
     const tb = $("#tab-onb"); if (tb) tb.classList.toggle("active", phase === "onboarding");
     const ta = $("#tab-aud"); if (ta) ta.classList.toggle("active", phase === "audit");
     $("#task-area").innerHTML = `<table class="grid"><thead><tr>
-      <th>Task</th><th>Status</th><th>Notes</th></tr></thead>
+      <th>Task</th><th>Assignee</th><th>Status</th><th>Notes</th></tr></thead>
       <tbody>${tasksFor(phase).map(taskRow).join("")}</tbody></table>`;
     $("#task-area").querySelectorAll("tr[data-task]").forEach((row) => {
       const tid = Number(row.dataset.task);
