@@ -27,6 +27,7 @@ $$;
 
 -- ownership model: who may update a task (status/done_date; column guard still applies)
 -- new signature: explicit assignment wins, derived default otherwise
+drop policy if exists tsk_upd on tasks;
 drop function if exists public.can_work_task(bigint, bigint);
 create or replace function public.can_work_task(
   t_client bigint, t_template bigint, t_assignee uuid, t_team text)

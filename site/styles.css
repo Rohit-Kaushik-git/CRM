@@ -10,7 +10,7 @@ button { font: inherit; padding: 7px 14px; border: 1px solid var(--line); border
   background: var(--brand); color: #fff; cursor: pointer; }
 button.small { padding: 3px 9px; font-size: 12px; }
 button.secondary, .tabs button { background: #fff; color: var(--ink); }
-input, select { font: inherit; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+input, select { font: inherit; max-width: 260px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
 .muted { color: var(--muted); }
 
 #login, #reset { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
@@ -90,9 +90,6 @@ h2 { margin-top: 22px; }
 .pill-completed { background: #cfe8d8; color: #14532d; }
 
 .tag { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 11px; margin-left: 6px; border: 1px solid var(--line); color: var(--muted); }
-.tag-datateam { border-color: #b7d3f2; color: #0056b3; background: #f0f6fd; }
-.tag-taxteam { border-color: #d8c6ef; color: #6b34a8; background: #f7f2fc; }
-.tag-shruti { border-color: #f2c6d8; color: #b03060; background: #fdf2f7; }
 
 .overdue { color: var(--bad); font-weight: 600; }
 

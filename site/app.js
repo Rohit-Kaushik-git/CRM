@@ -60,7 +60,7 @@ const NAV = [
   { hash: "clients",    label: "Clients",       roles: ["admin"] },
   { hash: "open-items", label: "Open Items",    roles: ["admin"] },
   { hash: "team",       label: "Team",          roles: ["admin"] },
-  { hash: "my-items",   label: "My Open Items", roles: ["implementor"] },
+  { hash: "my-items",   label: "My Open Items", roles: ["admin", "implementor"] },
   { hash: "my-clients", label: "My Clients",    roles: ["implementor"] },
 ];
 
