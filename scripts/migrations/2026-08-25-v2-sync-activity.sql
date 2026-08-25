@@ -53,7 +53,7 @@ begin
   select id, client_id, title into t from tasks where id = new.task_id;
   insert into activity_log (client_id, task_id, actor_id, action, detail)
   values (t.client_id, t.id, new.author_id, 'note', t.title || ': ' || new.note);
-  if new.author_id is not null then
+  if auth.uid() is not null then
     update tasks set app_touched = true where id = new.task_id and not app_touched;
   end if;
   return new;
