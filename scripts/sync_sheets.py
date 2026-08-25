@@ -136,6 +136,41 @@ def client_status(text):
     return "In Progress"
 
 
+def parse_rag_status(text):
+    """Sheet RAG column mixes health (Green/Amber/Red) with lifecycle states."""
+    t = (text or "").strip().lower()
+    rag = {"green": "G", "amber": "A", "red": "R"}.get(t)
+    status = None
+    if "cancel" in t:
+        status = "Cancelled"
+    elif "hold" in t or "waiting" in t:
+        status = "On Hold"
+    elif "unresponsive" in t:
+        status = "Unresponsive"
+    return rag, status
+
+
+def sync_client_note(conf, cid, scope, text, dry):
+    """Import a sheet note cell as an [import] client_note, replacing the previous
+    import note for that scope only when the content changed."""
+    text = (text or "").strip()
+    if not text:
+        return 0
+    note = "[import] " + text
+    if dry:
+        return 0
+    existing = rest(conf, "GET",
+                    f"client_notes?client_id=eq.{cid}&scope=eq.{scope}"
+                    "&note=like.%5Bimport%5D*&select=id,note")
+    if any(n["note"] == note for n in existing):
+        return 0
+    for n in existing:
+        rest(conf, "DELETE", f"client_notes?id=eq.{n['id']}", prefer="return=minimal")
+    rest(conf, "POST", "client_notes",
+         {"client_id": cid, "scope": scope, "note": note}, prefer="return=minimal")
+    return 1
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     dry = "--dry-run" in argv
@@ -161,7 +196,8 @@ def main(argv=None):
         sys.exit(f"task_templates missing: {missing_tpls} — run migrations before syncing.")
 
     report = {"synced": 0, "skipped_filter": 0, "tasks_updated": 0,
-              "tasks_skipped_touched": 0, "unmatched_implementors": set()}
+              "tasks_skipped_touched": 0, "unmatched_implementors": set(),
+              "client_notes_updated": 0}
 
     for row in onboarding:
         actual = parse_date(row.get("Actual Time Tracking Live Date", ""))
@@ -177,6 +213,7 @@ def main(argv=None):
             report["unmatched_implementors"].add(imp_name)
 
         prev_system = row.get("Previous System", "").lower()
+        rag, status_override = parse_rag_status(row.get("RAG", ""))
         client = {
             "dsp_name": row["DSP Name"],
             "short_code": row.get("DSP Short Code", ""),
@@ -184,16 +221,14 @@ def main(argv=None):
                        else "Paycom" if "paycom" in prev_system
                        else "New" if "new" in prev_system else None),
             "previous_system": row.get("Previous System") or None,
-            "status": client_status(row.get("Final Status", "")),
+            "status": status_override or client_status(row.get("Final Status", "")),
             "tt_live_date": iso(actual or expected),
             "payroll_cutoff_date": iso(parse_date(row.get("Payroll Cut off Date", ""))),
             "first_pay_date": iso(parse_date(row.get("Payroll Live(Pay) Date", ""))),
-            "rag": (row.get("RAG", "").strip()[:1].upper() or None),
+            "rag": rag,
             "notes": (f"Audit folder coverage: {arow.get('Coverage')} (last checked {arow.get('Last Checked')})"
                       if arow.get("Coverage") else None),
         }
-        if client["rag"] not in ("R", "A", "G"):
-            client["rag"] = None
         ex = existing.get(row["DSP Name"].upper())
         if imp_id and not (ex and ex.get("implementor_id")):
             client["implementor_id"] = imp_id  # only fill when app hasn't set one
@@ -260,6 +295,11 @@ def main(argv=None):
                 if patch:
                     rest(conf, "PATCH", f"client_modules?id=eq.{m['id']}", patch, prefer="return=minimal")
 
+        report["client_notes_updated"] += sync_client_note(
+            conf, cid, "Company", row.get("High Level Status", ""), dry)
+        report["client_notes_updated"] += sync_client_note(
+            conf, cid, "Benefits", row.get("Benefits Details", ""), dry)
+
         report["synced"] += 1
 
     print("\n--- sync report ---")
@@ -267,6 +307,7 @@ def main(argv=None):
     print(f"skipped (TT filter):   {report['skipped_filter']}")
     print(f"tasks updated:         {report['tasks_updated']}")
     print(f"tasks skipped (app):   {report['tasks_skipped_touched']}")
+    print(f"client notes updated:  {report['client_notes_updated']}")
     print(f"unmatched implementors: {sorted(report['unmatched_implementors']) or 'none'}")
 
 

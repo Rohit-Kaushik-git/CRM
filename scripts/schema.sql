@@ -31,7 +31,7 @@ create table clients (
   previous_system     text,
   implementor_id      uuid references users(id),
   status              text not null default 'Not Started'
-                      check (status in ('Not Started','In Progress','Live','Completed')),
+                      check (status in ('Not Started','In Progress','Live','Completed','Cancelled','On Hold','Unresponsive')),
   tt_live_date        date,
   payroll_cutoff_date date,
   first_pay_date      date,
@@ -254,3 +254,28 @@ create or replace view client_last_activity with (security_invoker = true) as
 select client_id, max(created_at) as last_activity
 from activity_log
 group by client_id;
+
+-- company- and module-level note history (append-only, like task_notes)
+create table if not exists client_notes (
+  id         bigint generated always as identity primary key,
+  client_id  bigint not null references clients(id) on delete cascade,
+  scope      text not null default 'Company'
+             check (scope in ('Company','TimeTracking','Payroll','Benefits','HR')),
+  author_id  uuid references users(id) on delete set null,
+  note       text not null,
+  created_at timestamptz not null default now()
+);
+
+create or replace function public.log_client_note_insert()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into activity_log (client_id, actor_id, action, detail)
+  values (new.client_id, new.author_id, 'note',
+          case when new.scope = 'Company' then new.note
+               else new.scope || ': ' || new.note end);
+  return new;
+end $$;
+
+drop trigger if exists client_note_activity on client_notes;
+create trigger client_note_activity after insert on client_notes
+for each row execute function public.log_client_note_insert();

@@ -91,3 +91,10 @@ end $$;
 drop trigger if exists task_update_columns on tasks;
 create trigger task_update_columns before update on tasks
 for each row execute function public.enforce_task_update_columns();
+
+alter table client_notes enable row level security;
+drop policy if exists cnotes_read on client_notes;
+create policy cnotes_read on client_notes for select to authenticated using (true);
+drop policy if exists cnotes_ins on client_notes;
+create policy cnotes_ins on client_notes for insert to authenticated
+  with check (author_id = auth.uid());
