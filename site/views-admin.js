@@ -51,7 +51,8 @@ Views.renderToday = async (view) => {
   const lastByClient = Object.fromEntries(lastAct.map((r) => [r.client_id, r.last_activity]));
   const active = clients.filter((c) => c.status !== "Completed");
   const openish = (t) => t.status === "Open" || t.status === "In Progress";
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const now = new Date();  // local date, not UTC — must agree with daysUntil()'s day boundary
+  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const allTasks = clients.flatMap((c) => (c.tasks || []).map((t) => ({ ...t, _client: c })));
 
   const soon = active
