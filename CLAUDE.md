@@ -20,7 +20,7 @@ Push to `main` → Vercel auto-deploys `site/`. Schema changes: paste the change
 ## QA checklist (run before telling the team about a change)
 1. Sign-up with a non-@uzio.com email → rejected.
 2. Sign-up requires matching Confirm password.
-3. Admin account lands on Clients; implementor account lands on My Open Items.
+3. Admin account lands on Today; implementor account lands on My Open Items.
 4. Signed-out visitor: login form only; `curl` with anon key returns `[]`.
 5. Create client → 12 onboarding + 6 audit tasks + 4 module rows auto-created.
 6. Assign task → appears in that implementor's My Open Items.
@@ -29,11 +29,16 @@ Push to `main` → Vercel auto-deploys `site/`. Schema changes: paste the change
 9. Module/training toggles persist across refresh.
 10. Both screens usable at 375px width.
 
-## Import runbook
-1. Download the sheet tabs as CSV → `data/raw/onboarding.csv` (DSP Implementation tab), `data/raw/audit.csv` (Audit File Status tab).
-2. `py scripts/import_sheets.py --dry-run` — check names, dates, filter counts.
-3. `py scripts/import_sheets.py` — idempotent; re-running refreshes statuses and re-writes `[import]` notes.
-Note: imported tasks carry no assignees — assign in the UI once implementors have signed up.
+## Sync runbook
+- Scheduled: GitHub Actions "sheet-sync" runs every 2h (needs repo secrets SUPABASE_URL,
+  SUPABASE_SERVICE_KEY, SHEET_ONBOARDING_CSV_URL, SHEET_AUDIT_CSV_URL — the sheet URLs are
+  File → Share → Publish to web → CSV links for each tab).
+- Manual: `py scripts/sync_sheets.py --dry-run` then without the flag. `--local` uses
+  data/raw/*.csv instead of fetching URLs (import_sheets.py is a wrapper that forces --local).
+- Conflict rule: any task a human changed in the app (app_touched) is never modified by sync.
+- If the app 404s on client_last_activity/activity_log right after running a migration, run
+  `notify pgrst, 'reload schema';` in the SQL editor (PostgREST schema cache).
+Note: synced tasks carry no assignees — assign in the UI once implementors have signed up.
 
 ## Live URL
 https://crm-teal-chi-45.vercel.app

@@ -53,7 +53,7 @@ Views.renderToday = async (view) => {
   const openish = (t) => t.status === "Open" || t.status === "In Progress";
   const now = new Date();  // local date, not UTC — must agree with daysUntil()'s day boundary
   const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  const allTasks = clients.flatMap((c) => (c.tasks || []).map((t) => ({ ...t, _client: c })));
+  const allTasks = active.flatMap((c) => (c.tasks || []).map((t) => ({ ...t, _client: c })));
 
   const soon = active
     .filter((c) => { const d = daysUntil(c.tt_live_date); return d !== null && d >= 0 && d <= LIVE_SOON_DAYS; })
@@ -69,7 +69,7 @@ Views.renderToday = async (view) => {
   const auditGap = soon.filter((c) =>
     (c.tasks || []).some((t) => t.template?.phase === "audit" && openish(t)));
   const stale = active.filter((c) => {
-    const last = lastByClient[c.id];
+    const last = lastByClient[c.id] || c.created_at;
     return !last || (Date.now() - new Date(last).getTime()) / 86400000 >= STALE_DAYS;
   });
 
@@ -101,7 +101,7 @@ Views.renderToday = async (view) => {
       <td>${openAudit.map((t) => `<span class="chip">${esc(t.title)}</span>`).join(" ")}</td></tr>`;
   }).join("");
   const staleRows = stale.map((c) => {
-    const last = lastByClient[c.id];
+    const last = lastByClient[c.id] || c.created_at;
     const days = last ? Math.floor((Date.now() - new Date(last).getTime()) / 86400000) : null;
     return `<tr><td>${clientLink(c)}</td>
       <td>${days === null ? "no activity yet" : days + " days quiet"}</td>
@@ -171,7 +171,7 @@ Views.renderClientDetail = async (view, id) => {
     const canEdit = isAdmin || t.assignee_id === me.id;
     const notes = (t.task_notes || []).slice().sort((a, b) => b.created_at.localeCompare(a.created_at));
     const noteLine = (n) =>
-      `<div class="note">"${esc(n.note)}" — ${esc(n.author?.name || "import")}, ${n.created_at.slice(0, 10)}</div>`;
+      `<div class="note">"${esc(n.note)}" — ${esc(n.author?.name || "sync")}, ${n.created_at.slice(0, 10)}</div>`;
     return `<tr data-task="${t.id}">
       <td>${esc(t.title)}${t.template_id ? "" : ` <span class="chip">ad-hoc</span>`}</td>
       <td><select class="t-assignee" ${dis}>${userOpts(t.assignee_id)}</select></td>
@@ -201,7 +201,7 @@ Views.renderClientDetail = async (view, id) => {
     <div style="margin:-6px 0 12px;display:flex;gap:8px;flex-wrap:wrap">
       ${(() => { const d = daysUntil(c.tt_live_date);
                  return d === null ? "" : `<span class="chip"><b>${countdownLabel(d)}</b></span>`; })()}
-      ${(() => { const m = (c.notes || "").match(/coverage:\s*(\S+)/i);
+      ${(() => { const m = (c.notes || "").match(/coverage:\s*(.+?)\s*\(last checked/i);
                  return m ? `<span class="chip">Audit folder ${esc(m[1])}</span>` : ""; })()}
       <span class="chip">Onboarding ${pct(tasksFor("onboarding"))}%</span>
       <span class="chip">Audit ${pct(tasksFor("audit"))}%</span>

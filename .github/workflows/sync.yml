@@ -1,4 +1,9 @@
 name: sheet-sync
+permissions:
+  contents: read
+concurrency:
+  group: sheet-sync
+  cancel-in-progress: false
 on:
   schedule:
     - cron: "0 */2 * * *"   # every 2 hours (UTC)
@@ -7,6 +12,7 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -150,7 +150,7 @@ window.Store = (() => {
 
   async function listLastActivity() {
     const { data, error } = await sb.from("client_last_activity").select("*");
-    if (error) fail(error);
+    if (error) { console.warn("listLastActivity:", error.message); return []; }
     return data;
   }
 
@@ -160,7 +160,7 @@ window.Store = (() => {
       .eq("client_id", clientId)
       .order("created_at", { ascending: false })
       .limit(100);
-    if (error) fail(error);
+    if (error) { console.warn("getActivity:", error.message); return []; }
     return data;
   }
 

@@ -96,4 +96,13 @@ select client_id, max(created_at) as last_activity
 from activity_log
 group by client_id;
 
+-- one-time backfill: existing notes become timeline entries (idempotent via anti-join)
+insert into activity_log (client_id, task_id, actor_id, action, detail, created_at)
+select t.client_id, n.task_id, n.author_id, 'note', t.title || ': ' || n.note, n.created_at
+from task_notes n
+join tasks t on t.id = n.task_id
+where not exists (
+  select 1 from activity_log a
+  where a.task_id = n.task_id and a.action = 'note' and a.created_at = n.created_at);
+
 commit;

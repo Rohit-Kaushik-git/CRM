@@ -51,7 +51,7 @@ async function saveChange(msg, doFn, undoFn, refresh) {
 function latestNote(t) {
   const notes = (t.task_notes || []).slice().sort((a, b) => b.created_at.localeCompare(a.created_at));
   return notes[0]
-    ? `<span class="note">"${esc(notes[0].note)}" — ${esc(notes[0].author?.name || "import")}</span>`
+    ? `<span class="note">"${esc(notes[0].note)}" — ${esc(notes[0].author?.name || "sync")}</span>`
     : `<span class="muted">—</span>`;
 }
 
