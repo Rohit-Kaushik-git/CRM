@@ -23,7 +23,7 @@ returns boolean language sql stable security definer set search_path = public as
         and coalesce(tt.owner_team, 'Implementor') = 'Implementor')
     or exists (  -- team members work their team's tasks on any client
       select 1 from task_templates tt
-      join users u on u.id = auth.uid()
+      join users u on u.id = auth.uid() and u.active
       join app_config cfg on cfg.key = case tt.owner_team
             when 'Data Team' then 'team_data_team'
             when 'Tax Team'  then 'team_tax_team'

@@ -369,7 +369,7 @@ Views.renderClientDetail = async (view, id) => {
 
   if (isAdmin) {
     const FIELD_LABELS = {
-      status: "Status", rag: "RAG", vendor: "Vendor", implementor_id: "Implementor",
+      status: "Status", rag: "RAG", vendor: "Previous System", implementor_id: "Implementor",
       tt_live_date: "TT live", payroll_cutoff_date: "Payroll cutoff", first_pay_date: "First pay",
     };
     const bind = (sel, field) => {

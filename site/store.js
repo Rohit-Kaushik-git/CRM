@@ -85,7 +85,7 @@ window.Store = (() => {
   async function getClient(id) {
     const { data, error } = await sb.from("clients")
       .select(`*, implementor:users(name), client_modules(*),
-               tasks(*, template:task_templates(phase,sort_order), assignee:users!tasks_assignee_id_fkey(name),
+               tasks(*, template:task_templates(phase,sort_order,owner_team), assignee:users!tasks_assignee_id_fkey(name),
                      task_notes(note,created_at,author:users(name)))`)
       .eq("id", id).single();
     if (error) fail(error);

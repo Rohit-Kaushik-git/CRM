@@ -22,8 +22,8 @@ Push to `main` → Vercel auto-deploys `site/`. Schema changes: paste the change
 2. Sign-up requires matching Confirm password.
 3. Admin account lands on Today; implementor account lands on My Open Items.
 4. Signed-out visitor: login form only; `curl` with anon key returns `[]`.
-5. Create client → 12 onboarding + 6 audit tasks + 4 module rows auto-created.
-6. Assign task → appears in that implementor's My Open Items.
+5. Create client (modal) → 11 onboarding + 6 audit tasks + 4 module rows; New clients: all N/A except Company Setup + TT Setup, Audit tab hidden.
+6. Set a client's Implementor → their open implementor-owned tasks appear in that person's My Open Items; team members see their team's tasks.
 7. Done without note → blocked. Done with note → visible to admin in Open Items → Recently done, with author + date.
 8. Forgot password → email arrives → link opens set-new-password card → new password signs in.
 9. Module/training toggles persist across refresh.
@@ -38,7 +38,7 @@ Push to `main` → Vercel auto-deploys `site/`. Schema changes: paste the change
 - Conflict rule: any task a human changed in the app (app_touched) is never modified by sync.
 - If the app 404s on client_last_activity/activity_log right after running a migration, run
   `notify pgrst, 'reload schema';` in the SQL editor (PostgREST schema cache).
-Note: synced tasks carry no assignees — assign in the UI once implementors have signed up.
+Note: ownership is implicit — client implementor owns Implementor tasks; team tasks via app_config team_* email lists.
 
 ## Live URL
 https://crm-teal-chi-45.vercel.app
