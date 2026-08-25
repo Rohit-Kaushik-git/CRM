@@ -216,6 +216,14 @@ def main(argv=None):
         task_by_tpl = {t["template_id"]: t for t in tasks}
         last_checked = parse_date(arow.get("Last Checked", ""))
 
+        # Both vendor-specific Data Transfer columns map to one template; when both
+        # are filled, keep only the vendor-matching one so sequential PATCHes don't
+        # flip the status back and forth on every run.
+        if row.get("Data Transfer (Paycom)") and row.get("Data Transfer (ADP)"):
+            row = dict(row)
+            loser = "Data Transfer (ADP)" if client["vendor"] == "Paycom" else "Data Transfer (Paycom)"
+            row[loser] = ""
+
         for cols, src in ((ONBOARDING_COLS, row), (AUDIT_COLS, arow)):
             for col, tpl_name in cols.items():
                 if col not in src:
