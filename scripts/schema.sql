@@ -10,6 +10,10 @@ create table app_config (
   value text not null
 );
 insert into app_config values ('admin_emails', 'rohit.kaushik@uzio.com');
+insert into app_config values
+  ('team_data_team', 'shobhit.sharma@uzio.com'),
+  ('team_tax_team', ''),
+  ('team_pto', '');
 
 create table users (
   id     uuid primary key references auth.users(id) on delete cascade,
@@ -23,7 +27,7 @@ create table clients (
   id                  bigint generated always as identity primary key,
   dsp_name            text not null unique,
   short_code          text not null default '',
-  vendor              text check (vendor in ('ADP','Paycom')),
+  vendor              text check (vendor in ('ADP','Paycom','New')),
   previous_system     text,
   implementor_id      uuid references users(id),
   status              text not null default 'Not Started'
@@ -50,7 +54,8 @@ create table task_templates (
   id         bigint generated always as identity primary key,
   name       text not null,
   phase      text not null check (phase in ('onboarding','audit')),
-  sort_order int  not null
+  sort_order int  not null,
+  owner_team text not null default 'Implementor' check (owner_team in ('Implementor','Data Team','Tax Team','Shruti'))
 );
 
 create table tasks (
@@ -78,25 +83,24 @@ create table task_notes (
 
 -- Standard checklists (spec §3). Onboarding from the Onboarding Tracker columns,
 -- audit from the Audit Tracker columns.
-insert into task_templates (name, phase, sort_order) values
-  ('Company Setup','onboarding',1),
-  ('Federal/State Withholding & Payment','onboarding',2),
-  ('Data Transfer','onboarding',3),
-  ('Delta Data Upload','onboarding',4),
-  ('Time Tracking Setup (Kiosk/Mobile/Web)','onboarding',5),
-  ('Document Transfer','onboarding',6),
-  ('Historical Data Download','onboarding',7),
-  ('Audit Client Data & Minor Corrections','onboarding',8),
-  ('Final Payroll Review & Testing','onboarding',9),
-  ('Prior Pay Info Transfer & Approval','onboarding',10),
-  ('PTO Balance Move','onboarding',11),
-  ('Tax Review (Post Prior Upload)','onboarding',12),
-  ('Census Audit','audit',1),
-  ('Withholding Audit','audit',2),
-  ('Payment Audit','audit',3),
-  ('Prior Payroll Audit','audit',4),
-  ('Deduction Audit','audit',5),
-  ('Emergency Contact Audit','audit',6);
+insert into task_templates (name, phase, sort_order, owner_team) values
+  ('Company Setup','onboarding',1,'Implementor'),
+  ('Census Transfer','onboarding',2,'Implementor'),
+  ('Time Tracking Setup (Kiosk/Mobile/Web)','onboarding',3,'Implementor'),
+  ('Payment Method Transfer','onboarding',4,'Implementor'),
+  ('Federal/State Withholding','onboarding',5,'Data Team'),
+  ('Prior Pay Info Transfer & Approval','onboarding',6,'Data Team'),
+  ('Worker''s Compensation','onboarding',7,'Data Team'),
+  ('Historical Data Download','onboarding',8,'Implementor'),
+  ('Tax Review','onboarding',9,'Tax Team'),
+  ('PTO Balance Move','onboarding',10,'Shruti'),
+  ('Document Transfer','onboarding',11,'Data Team'),
+  ('Census Audit','audit',1,'Implementor'),
+  ('Withholding Audit','audit',2,'Data Team'),
+  ('Payment Audit','audit',3,'Implementor'),
+  ('Prior Payroll Audit','audit',4,'Data Team'),
+  ('Deduction Audit','audit',5,'Data Team'),
+  ('Emergency Contact Audit','audit',6,'Implementor');
 
 -- Sign-up hook: reject non-uzio emails, mirror into public.users, role from admin list.
 create or replace function public.handle_new_user()
@@ -122,12 +126,16 @@ create trigger on_auth_user_created
 after insert on auth.users
 for each row execute function public.handle_new_user();
 
--- New client hook: seed the standard checklists and the 4 module rows.
+-- New client hook: seed the standard checklists (right status up front) and the 4 module rows.
 create or replace function public.seed_client_tasks()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into tasks (client_id, template_id, title)
-  select new.id, t.id, t.name from task_templates t;
+  insert into tasks (client_id, template_id, title, status)
+  select new.id, t.id, t.name,
+         case when coalesce(new.vendor,'') not in ('ADP','Paycom')
+                   and t.name not in ('Company Setup','Time Tracking Setup (Kiosk/Mobile/Web)')
+              then 'N/A' else 'Open' end
+  from task_templates t;
   insert into client_modules (client_id, module) values
     (new.id, 'TimeTracking'), (new.id, 'Payroll'), (new.id, 'Benefits'), (new.id, 'HR');
   return new;
@@ -136,6 +144,29 @@ end $$;
 create trigger on_client_created
 after insert on clients
 for each row execute function public.seed_client_tasks();
+
+-- vendor change flips untouched tasks between Open and N/A
+create or replace function public.apply_vendor_checklist_rules()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.vendor is distinct from old.vendor then
+    if coalesce(new.vendor,'') in ('ADP','Paycom')
+       and coalesce(old.vendor,'') not in ('ADP','Paycom') then
+      update tasks set status = 'Open'
+      where client_id = new.id and status = 'N/A' and app_touched = false;
+    elsif coalesce(new.vendor,'') not in ('ADP','Paycom') then
+      update tasks set status = 'N/A', done_date = null
+      where client_id = new.id and status = 'Open' and app_touched = false
+        and template_id in (select id from task_templates
+                            where name not in ('Company Setup','Time Tracking Setup (Kiosk/Mobile/Web)'));
+    end if;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists client_vendor_rules on clients;
+create trigger client_vendor_rules after update on clients
+for each row execute function public.apply_vendor_checklist_rules();
 
 create table if not exists activity_log (
   id         bigint generated always as identity primary key,
