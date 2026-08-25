@@ -43,6 +43,10 @@ create policy tsk_upd       on tasks          for update to authenticated
 create policy nts_ins       on task_notes     for insert to authenticated
   with check (author_id = auth.uid());
 
+alter table activity_log enable row level security;
+drop policy if exists act_read on activity_log;
+create policy act_read on activity_log for select to authenticated using (true);
+
 -- Column guard (spec 3: implementors may change only status on their own tasks).
 -- The tsk_upd policy above grants row access; this trigger pins which columns a
 -- non-admin may actually change (status + done_date — set together when marking Done).
