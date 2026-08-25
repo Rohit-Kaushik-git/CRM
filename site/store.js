@@ -72,7 +72,11 @@ window.Store = (() => {
 
   async function listClients() {
     const { data, error } = await sb.from("clients")
-      .select("*, implementor:users(name), tasks(status), client_modules(module,opted,training_done)")
+      .select(`*, implementor:users(name),
+               tasks(id,title,status,assignee_id,due_date,
+                     template:task_templates(phase),
+                     assignee:users!tasks_assignee_id_fkey(name)),
+               client_modules(module,opted,training_done)`)
       .order("dsp_name");
     if (error) fail(error);
     return data;
@@ -144,8 +148,24 @@ window.Store = (() => {
     return data;
   }
 
+  async function listLastActivity() {
+    const { data, error } = await sb.from("client_last_activity").select("*");
+    if (error) fail(error);
+    return data;
+  }
+
+  async function getActivity(clientId) {
+    const { data, error } = await sb.from("activity_log")
+      .select("*, actor:users(name)")
+      .eq("client_id", clientId)
+      .order("created_at", { ascending: false })
+      .limit(100);
+    if (error) fail(error);
+    return data;
+  }
+
   return { signUp, signIn, signOut, loadMe, getMe, resetPassword, updatePassword, onPasswordRecovery, listUsers, updateUser,
            getAdminEmails, setAdminEmails, listClients, getClient, createClient,
            updateClient, updateModule, createTask, updateTask, addNote,
-           listOpenItems, listDoneItems };
+           listOpenItems, listDoneItems, listLastActivity, getActivity };
 })();

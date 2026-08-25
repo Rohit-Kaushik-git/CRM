@@ -10,6 +10,21 @@ function pct(tasks) {
   return Math.round((done / tasks.length) * 100);
 }
 
+const LIVE_SOON_DAYS = 14, UNOWNED_WINDOW_DAYS = 21, STALE_DAYS = 7;
+
+function daysUntil(dateStr) {
+  if (!dateStr) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.round((new Date(dateStr + "T00:00:00") - today) / 86400000);
+}
+
+function countdownLabel(d) {
+  if (d === null) return "";
+  if (d > 0) return `T-${d} day${d === 1 ? "" : "s"}`;
+  if (d === 0) return "Goes live today";
+  return `Live ${-d}d ago`;
+}
+
 function clientRow(c) {
   return `<tr class="rowlink" data-id="${c.id}">
     <td><b>${esc(c.dsp_name)}</b></td><td>${esc(c.short_code)}</td><td>${esc(c.vendor || "—")}</td>
@@ -30,6 +45,85 @@ function wireClientRows(view) {
   view.querySelectorAll(".rowlink").forEach((r) =>
     (r.onclick = () => (location.hash = `#client/${r.dataset.id}`)));
 }
+
+Views.renderToday = async (view) => {
+  const [clients, lastAct] = await Promise.all([Store.listClients(), Store.listLastActivity()]);
+  const lastByClient = Object.fromEntries(lastAct.map((r) => [r.client_id, r.last_activity]));
+  const active = clients.filter((c) => c.status !== "Completed");
+  const openish = (t) => t.status === "Open" || t.status === "In Progress";
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const allTasks = clients.flatMap((c) => (c.tasks || []).map((t) => ({ ...t, _client: c })));
+
+  const soon = active
+    .filter((c) => { const d = daysUntil(c.tt_live_date); return d !== null && d >= 0 && d <= LIVE_SOON_DAYS; })
+    .sort((a, b) => (a.tt_live_date || "").localeCompare(b.tt_live_date || ""));
+  const overdue = allTasks
+    .filter((t) => openish(t) && t.due_date && t.due_date < todayIso)
+    .sort((a, b) => a.due_date.localeCompare(b.due_date));
+  const unowned = allTasks.filter((t) => {
+    const d = daysUntil(t._client.tt_live_date);
+    return openish(t) && !t.assignee_id && d !== null && d >= 0 && d <= UNOWNED_WINDOW_DAYS;
+  });
+  const atRisk = active.filter((c) => c.rag === "R" || c.rag === "A");
+  const auditGap = soon.filter((c) =>
+    (c.tasks || []).some((t) => t.template?.phase === "audit" && openish(t)));
+  const stale = active.filter((c) => {
+    const last = lastByClient[c.id];
+    return !last || (Date.now() - new Date(last).getTime()) / 86400000 >= STALE_DAYS;
+  });
+
+  const clientLink = (c) => `<a href="#client/${c.id}">${esc(c.dsp_name)}</a>`;
+  const table = (head, rows) => `<table class="grid"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+  const section = (title, count, body) => count
+    ? `<h2>${title} <span class="muted">(${count})</span></h2>${body}` : "";
+
+  const soonRows = soon.map((c) => `<tr>
+      <td>${clientLink(c)}</td><td><b>${countdownLabel(daysUntil(c.tt_live_date))}</b></td>
+      <td>${fmtDate(c.tt_live_date)}</td><td>${esc(c.implementor?.name || "—")}</td>
+      <td><span class="bar"><span style="width:${pct(c.tasks)}%"></span></span> ${pct(c.tasks)}%</td>
+      <td><span class="rag rag-${c.rag || "none"}"></span> ${esc(c.status)}</td></tr>`).join("");
+  const overdueRows = overdue.map((t) => `<tr>
+      <td>${clientLink(t._client)}</td><td>${esc(t.title)}</td>
+      <td>${esc(t.assignee?.name || "Unassigned")}</td><td>${fmtDate(t.due_date)}</td>
+      <td>${t.status}</td></tr>`).join("");
+  const unownedRows = unowned.map((t) => `<tr>
+      <td>${clientLink(t._client)}</td><td>${esc(t.title)}</td>
+      <td>${countdownLabel(daysUntil(t._client.tt_live_date))}</td></tr>`).join("");
+  const riskRows = atRisk.map((c) => `<tr>
+      <td>${clientLink(c)}</td><td><span class="rag rag-${c.rag}"></span> ${c.rag}</td>
+      <td>${esc(c.status)}</td><td>${fmtDate(c.tt_live_date)}</td>
+      <td>${esc(c.implementor?.name || "—")}</td></tr>`).join("");
+  const gapRows = auditGap.map((c) => {
+    const openAudit = (c.tasks || []).filter((t) => t.template?.phase === "audit" && openish(t));
+    return `<tr><td>${clientLink(c)}</td>
+      <td>${countdownLabel(daysUntil(c.tt_live_date))}</td>
+      <td>${openAudit.map((t) => `<span class="chip">${esc(t.title)}</span>`).join(" ")}</td></tr>`;
+  }).join("");
+  const staleRows = stale.map((c) => {
+    const last = lastByClient[c.id];
+    const days = last ? Math.floor((Date.now() - new Date(last).getTime()) / 86400000) : null;
+    return `<tr><td>${clientLink(c)}</td>
+      <td>${days === null ? "no activity yet" : days + " days quiet"}</td>
+      <td>${esc(c.implementor?.name || "—")}</td><td>${esc(c.status)}</td></tr>`;
+  }).join("");
+
+  const total = soon.length + overdue.length + unowned.length + atRisk.length + auditGap.length + stale.length;
+  view.innerHTML = `<div class="page-head"><h1>Today</h1>
+      <span class="muted">${new Date().toDateString()}</span></div>` +
+    (total === 0 ? `<p class="muted" style="font-size:15px">Nothing needs attention. 🎉</p>` : "") +
+    section("Going live soon", soon.length,
+      table(`<th>Client</th><th>Countdown</th><th>TT live</th><th>Implementor</th><th>Checklist</th><th>Status</th>`, soonRows)) +
+    section("Overdue", overdue.length,
+      table(`<th>Client</th><th>Task</th><th>Owner</th><th>Due</th><th>Status</th>`, overdueRows)) +
+    section(`Unowned work (go-live ≤ ${UNOWNED_WINDOW_DAYS}d)`, unowned.length,
+      table(`<th>Client</th><th>Task</th><th>Go-live</th>`, unownedRows)) +
+    section("At risk (RAG)", atRisk.length,
+      table(`<th>Client</th><th>RAG</th><th>Status</th><th>TT live</th><th>Implementor</th>`, riskRows)) +
+    section("Audit gaps before go-live", auditGap.length,
+      table(`<th>Client</th><th>Countdown</th><th>Open audit items</th>`, gapRows)) +
+    section("Gone quiet", stale.length,
+      table(`<th>Client</th><th>Silence</th><th>Implementor</th><th>Status</th>`, staleRows));
+};
 
 Views.renderClients = async (view) => {
   const clients = await Store.listClients();

@@ -56,6 +56,7 @@ function latestNote(t) {
 }
 
 const NAV = [
+  { hash: "today",      label: "Today",         roles: ["admin"] },
   { hash: "clients",    label: "Clients",       roles: ["admin"] },
   { hash: "open-items", label: "Open Items",    roles: ["admin"] },
   { hash: "team",       label: "Team",          roles: ["admin"] },
@@ -72,13 +73,14 @@ async function renderRoute() {
   const me = Store.getMe();
   if (!me) return;
   const view = $("#view");
-  const home = me.role === "admin" ? "clients" : "my-items";
+  const home = me.role === "admin" ? "today" : "my-items";
   const hash = location.hash.replace(/^#/, "") || home;
   const [name, arg] = hash.split("/");
   document.querySelectorAll("#nav-items a").forEach((a) =>
     a.classList.toggle("active", a.dataset.nav === name));
   view.innerHTML = `<p class="muted">Loading…</p>`;
   const routes = {
+    "today":      () => Views.renderToday(view),
     "clients":    () => Views.renderClients(view),
     "client":     () => Views.renderClientDetail(view, Number(arg)),
     "open-items": () => Views.renderOpenItems(view),

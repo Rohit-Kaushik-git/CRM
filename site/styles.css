@@ -74,3 +74,8 @@ tr.rowlink { cursor: pointer; } tr.rowlink:hover { background: #f6f9fd; }
   #nav-items { flex-direction: row; }
   .nav-foot { margin-top: 0; margin-left: auto; flex-direction: row; align-items: center; }
 }
+
+h2 { margin-top: 22px; }
+.act-row { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.act-row:last-child { border-bottom: none; }
+.act-row .when { color: var(--muted); margin-right: 8px; font-size: 12px; }
