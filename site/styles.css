@@ -118,3 +118,7 @@ details.cgroup > summary::-webkit-details-marker { display: none; }
 details.cgroup > summary::before { content: "▸"; color: var(--muted); }
 details.cgroup[open] > summary::before { content: "▾"; }
 details.cgroup table.grid { border: none; border-radius: 0; }
+
+/* Long notes fold to two lines; click unfolds (clampHtml in views-admin.js). */
+.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.clamp.open { display: inline; -webkit-line-clamp: unset; }
