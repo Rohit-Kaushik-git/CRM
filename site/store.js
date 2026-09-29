@@ -170,6 +170,19 @@ window.Store = (() => {
     return data;
   }
 
+  /* Phase 2 data views (read-only reporting tables, filled by the dashboard's
+     push script — the app only ever selects from them). */
+  async function listReport(table, orderCol, ascending = true) {
+    const { data, error } = await sb.from(table).select("*").order(orderCol, { ascending });
+    if (error) fail(error);
+    return data;
+  }
+  const listApiActivity      = () => listReport("api_activity_runs", "client_name");
+  const listPayrollHealth    = () => listReport("payroll_health", "gap_days", false);
+  const listDataCoverage     = () => listReport("client_data_coverage", "company_name");
+  const listDocumentTransfers = () => listReport("document_transfer", "client_name");
+  const listDocumentCounts   = () => listReport("client_document_counts", "company_name");
+
   async function getActivity(clientId) {
     const { data, error } = await sb.from("activity_log")
       .select("*, actor:users(name)")
@@ -183,5 +196,7 @@ window.Store = (() => {
   return { signUp, signIn, signOut, loadMe, getMe, resetPassword, updatePassword, onPasswordRecovery, listUsers, updateUser,
            getAdminEmails, setAdminEmails, listClients, getClient, createClient,
            updateClient, updateModule, createTask, updateTask, addNote, addClientNote,
-           listOpenTasks, listDoneTasks, getTeams, listLastActivity, getActivity };
+           listOpenTasks, listDoneTasks, getTeams, listLastActivity, getActivity,
+           listApiActivity, listPayrollHealth, listDataCoverage,
+           listDocumentTransfers, listDocumentCounts };
 })();
