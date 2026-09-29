@@ -413,7 +413,12 @@ Views.renderClientDetail = async (view, id) => {
           <span class="when">${a.created_at.slice(0, 16).replace("T", " ")}</span>
           <b>${esc(a.actor?.name || "sync")}</b> ${esc(a.detail)}</div>`).join("")
         : `<p class="muted">No activity recorded yet.</p>`}
-    </div>`;
+    </div>
+    <div id="cd-platform" style="margin-top:14px"><p class="muted">Loading platform data…</p></div>`;
+
+  // Fills #cd-platform from the read-only reporting tables (views-data.js).
+  // Fire-and-forget: the core page never waits on it and never breaks with it.
+  if (typeof loadPlatformPanel === "function") loadPlatformPanel(c);
 
   const reload = () => Views.renderClientDetail(view, id);
 
