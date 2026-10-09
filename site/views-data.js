@@ -214,6 +214,7 @@ async function healthTab() {
 async function coverageTab() {
   const rows = await Store.listDataCoverage();
   $("#data-extra").innerHTML = "";
+  $("#data-extra").appendChild(refreshControl(["data_coverage", "push_to_crm"]));
   const render = () => {
     const list = rows.filter((r) =>
       !dataQ || (r.company_name + " " + (r.dsp_short_code || "")).toLowerCase().includes(dataQ));
@@ -243,6 +244,9 @@ async function docsTab() {
   const [transfers, counts] = await Promise.all([
     Store.listDocumentTransfers(), Store.listDocumentCounts()]);
   $("#data-extra").innerHTML = "";
+  // Only the counted half: the transfer columns come from the completion
+  // mails, which no prod query can rebuild.
+  $("#data-extra").appendChild(refreshControl(["document_counts", "push_to_crm"]));
   const pillCls = (s) => s === "Complete" ? "pill-done" : s === "Blocked" ? "pill-cancelled"
     : s === "In progress" ? "pill-progress" : s === "Nothing to transfer" ? "pill-na" : "pill-onhold";
   const failTitle = (r) => ["filename format: " + (r.fail_filename_format ?? 0),
