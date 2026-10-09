@@ -120,7 +120,7 @@ function refreshControl(batches, label) {
       at the moment it runs */
 const REFRESH_EVERYTHING = [
   ["backfill_fein", "work_locations", "data_coverage",
-   "document_counts", "system_activity", "api_activity"],
+   "document_counts", "system_activity", "payroll_health", "api_activity"],
   ["load_history"],
   ["push_to_crm"],
 ];
@@ -214,6 +214,7 @@ async function healthTab() {
   const statuses = [...new Set(rows.map((r) => r.status).filter(Boolean))].sort();
   $("#data-extra").innerHTML = `<select id="ph-status"><option value="all">All statuses</option>
     ${statuses.map((s) => `<option>${esc(s)}</option>`).join("")}</select>`;
+  $("#data-extra").appendChild(refreshControl(["payroll_health", "push_to_crm"]));
   const pillCls = (s) => s === "Covered" ? "pill-done" : s === "New to platform" ? "pill-na"
     : s === "Handover gap" ? "pill-onhold" : "pill-cancelled";
   const span = (from, to, n) => from ? `${esc(from)} → ${esc(to)}<div class="muted" style="font-size:11px">${n ?? 0} rows</div>` : `<span class="muted">—</span>`;
