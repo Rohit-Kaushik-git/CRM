@@ -140,3 +140,11 @@ details.cgroup table.grid { border: none; border-radius: 0; }
 .btn-refresh:disabled { opacity: .55; cursor: progress; }
 .refresh-status { font-size: 12px; }
 .refresh-status--error { color: #b3261e; }
+
+/* The Data page head has three children now, and .page-head is
+   justify-content: space-between -- which would strand the client count in
+   the middle. Pushing the count right instead keeps it next to the button and
+   leaves the heading where it was. Scoped to this page so no other page-head
+   moves. */
+.page-head #data-count { margin-left: auto; }
+.page-head .refresh-control { margin-left: 12px; }

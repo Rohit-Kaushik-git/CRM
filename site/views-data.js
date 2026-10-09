@@ -69,23 +69,36 @@ async function runProdRefresh(jobs, onLine) {
   return body;
 }
 
-/** A refresh button plus its own status line, for one Data tab. */
-function refreshControl(jobs) {
+/**
+ * A refresh button plus its own status line.
+ *
+ * `batches` is either one list of jobs, or several run one after another.
+ * Several matters for the whole-set refresh: an Edge Function has a wall-clock
+ * limit, and load_history is the one job that deletes before it re-inserts, so
+ * it gets a call of its own rather than sharing a timeout with six others.
+ */
+function refreshControl(batches, label) {
+  if (typeof batches[0] === "string") batches = [batches];
   const wrap = document.createElement("span");
   wrap.className = "refresh-control";
   wrap.innerHTML =
-    '<button type="button" class="btn-refresh">Refresh from Uzio</button>' +
+    '<button type="button" class="btn-refresh"></button>' +
     '<span class="refresh-status muted"></span>';
   const btn = wrap.querySelector("button");
   const status = wrap.querySelector(".refresh-status");
+  btn.textContent = label || "Refresh from Uzio";
 
   btn.onclick = async () => {
     btn.disabled = true;
-    // It reads prod and rewrites two projects; ~20s is normal and a silent
-    // button for that long reads as broken.
-    status.textContent = "Reading Uzio… this takes up to a minute.";
     try {
-      await runProdRefresh(jobs, (l) => console.log("[prod-refresh]", l));
+      for (let i = 0; i < batches.length; i++) {
+        // It reads prod and rewrites two projects; tens of seconds is normal,
+        // and a silent button for that long reads as broken.
+        status.textContent = batches.length > 1
+          ? `Reading Uzio… step ${i + 1} of ${batches.length}`
+          : "Reading Uzio… this takes up to a minute.";
+        await runProdRefresh(batches[i], (l) => console.log("[prod-refresh]", l));
+      }
       status.textContent = "Done. Reloading…";
       // Re-render from the CRM's now-updated copy.
       location.reload();
@@ -99,6 +112,19 @@ function refreshControl(jobs) {
   return wrap;
 }
 
+/* Everything, in three calls.
+   1. the jobs that only upsert, so a failure leaves the old rows in place
+   2. load_history on its own -- it rebuilds each client's slice, and a
+      timeout halfway through that is the one outcome worth engineering away
+   3. the copy into this project, last, because it copies whatever is there
+      at the moment it runs */
+const REFRESH_EVERYTHING = [
+  ["backfill_fein", "work_locations", "data_coverage",
+   "document_counts", "system_activity", "api_activity"],
+  ["load_history"],
+  ["push_to_crm"],
+];
+
 
 const dpill = (label, cls) => `<span class="pill ${cls}">${esc(label)}</span>`;
 const dpct = (num, den) => den ? Math.round(num / den * 100) : null;
@@ -109,7 +135,7 @@ const dshort = (d) => d ? String(d).slice(5) : ""; // 2026-08-18 -> 08-18
 Views.renderData = async (view, tab) => {
   if (!DATA_TABS.some(([k]) => k === tab)) tab = "api";
   view.innerHTML = `
-    <div class="page-head"><h1>Data</h1><span id="data-count" class="muted"></span></div>
+    <div class="page-head"><h1>Data</h1><span id="data-count" class="muted"></span><span id="data-refresh-all"></span></div>
     <div class="tabbar">${DATA_TABS.map(([k, label]) =>
       `<button type="button" data-tab="${k}" class="${k === tab ? "active" : ""}">${label}</button>`).join("")}
     </div>
@@ -120,6 +146,10 @@ Views.renderData = async (view, tab) => {
     <div id="data-body"><p class="muted">Loading…</p></div>`;
   view.querySelectorAll("[data-tab]").forEach((b) =>
     b.onclick = () => { location.hash = "#data/" + b.dataset.tab; });
+  // Every prod job, not just the open tab's. The per-tab buttons stay: most
+  // of the time one tab is what someone actually wants, and it is far quicker.
+  $("#data-refresh-all").appendChild(
+    refreshControl(REFRESH_EVERYTHING, "Refresh everything"));
   let renderBody = () => {}; // becomes real once the tab's data has arrived
   $("#data-q").oninput = (e) => { dataQ = e.target.value.trim().toLowerCase(); renderBody(); };
 
