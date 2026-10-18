@@ -73,7 +73,7 @@ window.Store = (() => {
   async function listClients() {
     const { data, error } = await sb.from("clients")
       .select(`*, implementor:users(name),
-               tasks(id,title,status,assignee_id,assigned_team,due_date,
+               tasks(id,title,status,assignee_id,assigned_team,due_date,done_date,
                      template:task_templates(phase,owner_team,sort_order),
                      assignee:users!tasks_assignee_id_fkey(name)),
                client_modules(module,opted,training_done)`)
@@ -188,6 +188,7 @@ window.Store = (() => {
   const listEwa              = () => listReport("client_ewa", "company_name");
   const listSystemActivity   = () => listReport("client_system_activity", "dsp_short_code");
   const listClientProfiles   = () => listReport("client_profile", "dsp_short_code");
+  const listClientMail       = () => listReport("client_mail", "last_date", false);
   /* PostgREST answers at most 1,000 rows per request, so page through. */
   async function listAll(table) {
     const out = [];
@@ -303,6 +304,6 @@ window.Store = (() => {
            listOpenTasks, listDoneTasks, getTeams, listLastActivity, getActivity,
            listApiActivity, listPayrollHealth, listDataCoverage,
            listDocumentTransfers, listDocumentCounts,
-           listHistClients, listHistStatus, listHistOutOfScope, listEwa, listSystemActivity, listClientProfiles, listPaySetup, listTaxMapping, listWorkLocations,
+           listHistClients, listHistStatus, listHistOutOfScope, listEwa, listSystemActivity, listClientProfiles, listClientMail, listPaySetup, listTaxMapping, listWorkLocations,
            getPlatformBundle, getClientFein };
 })();

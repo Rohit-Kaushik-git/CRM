@@ -188,157 +188,269 @@ function wireClientRows(view) {
     (r.onclick = () => (location.hash = `#client/${r.dataset.id}`)));
 }
 
-Views.renderToday = async (view) => {
-  const soft = (p) => p.catch((e) => { console.warn("Today:", e.message); return []; });
-  const [clients, lastAct, sysRows, apiRows, profRows] = await Promise.all([
-    Store.listClients(), Store.listLastActivity(),
-    soft(Store.listSystemActivity()), soft(Store.listApiActivity()), soft(Store.listClientProfiles())]);
-  const lastByClient = Object.fromEntries(lastAct.map((r) => [r.client_id, r.last_activity]));
-  const active = clients.filter((c) => c.status !== "Completed" && c.status !== "Cancelled");
-  const openish = (t) => t.status === "Open" || t.status === "In Progress";
-  const now = new Date();  // local date, not UTC — must agree with daysUntil()'s day boundary
-  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  const allTasks = active.flatMap((c) => (c.tasks || []).map((t) => ({ ...t, _client: c, client: c })));
+/* Today answers one question per lane: what is late, what is due this week,
+   what is moving, what is stuck on someone else - plus the mail that names a
+   client. Only a handful of open tasks carry a due date, so a task without one
+   gets a date from its phase and the client's go-live (TODAY_OFFSETS); prior
+   payroll is due PRIOR_WINDOW_DAYS after the first punch (priorPayrollState). */
+const TODAY_OFFSETS = { setup: -7, mig: -5, audit: -2 };   // days relative to go-live
+const TODAY_WEEK = 7, HYPERCARE_DAYS = 14, TODAY_CAP = 10;
+const PAUSED_STATUSES = ["On Hold", "Unresponsive"];
+const TODAY_SCOPE_KEY = "today_scope";
 
-  const soon = active
-    .filter((c) => { const d = daysUntil(c.tt_live_date); return d !== null && d >= 0 && d <= LIVE_SOON_DAYS; })
-    .sort((a, b) => (a.tt_live_date || "").localeCompare(b.tt_live_date || ""));
-  const overdue = allTasks
-    .filter((t) => openish(t) && t.due_date && t.due_date < todayIso)
-    .sort((a, b) => a.due_date.localeCompare(b.due_date));
-  const unowned = active.filter((c) => {
-    const d = daysUntil(c.tt_live_date);
-    return !c.implementor_id && d !== null && d >= 0 && d <= UNOWNED_WINDOW_DAYS;
-  }).map((c) => ({ c, open: (c.tasks || []).filter(openish).length }));
-  const ragRank = { R: 0, A: 1 };
-  const atRisk = active
-    .filter((c) => c.rag === "R" || c.rag === "A" || c.status === "On Hold" || c.status === "Unresponsive")
-    .sort((a, b) => (ragRank[a.rag] ?? 2) - (ragRank[b.rag] ?? 2));
-  const auditGap = soon.filter((c) =>
-    (c.tasks || []).some((t) => t.template?.phase === "audit" && openish(t)));
+Views.renderToday = async (view) => {
+  const soft = (p, empty = []) => p.catch((e) => { console.warn("Today:", e.message); return empty; });
+  const [clients, lastAct, sysRows, apiRows, profRows, mailRows, teams] = await Promise.all([
+    Store.listClients(), Store.listLastActivity(),
+    soft(Store.listSystemActivity()), soft(Store.listApiActivity()), soft(Store.listClientProfiles()),
+    soft(Store.listClientMail(), null), soft(Store.getTeams(), {})]);
+  const me = Store.getMe() || {};
+  const myEmail = String(me.email || "").toLowerCase();
+  const myTeams = Object.keys(teams).filter((t) => (teams[t] || []).includes(myEmail));
+  const lastByClient = Object.fromEntries(lastAct.map((r) => [r.client_id, r.last_activity]));
+  const openish = (t) => t.status === "Open" || t.status === "In Progress";
+  const isLive = (c) => c.status === "Live" || c.status === "Completed";
+  const active = clients.filter((c) => c.status !== "Completed" && c.status !== "Cancelled");
+  const todayIso = localIso(new Date());
+  const addDays = (iso, n) => { const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n); return localIso(d); };
   const quietDays = (c) => {
     const last = lastByClient[c.id] || c.created_at;
     return last ? Math.floor((Date.now() - new Date(last).getTime()) / 86400000) : null;
   };
-  const stale = active
-    .filter((c) => { const d = quietDays(c); return d === null || d >= STALE_DAYS; })
-    .sort((a, b) => (quietDays(b) ?? 9e9) - (quietDays(a) ?? 9e9));
 
-  const clientLink = (c) => `<a href="#client/${c.id}">${esc(c.dsp_name)}</a>`;
+  /* Whose item: a person (user id) and/or a team. */
+  const implOwner = (c) => ({ user: c.implementor_id, label: c.implementor?.name || "No implementer" });
+  const ownerOf = (t, c) => {
+    if (t.assignee_id) return { user: t.assignee_id, label: t.assignee?.name || "Assigned" };
+    const team = t.assigned_team || t.template?.owner_team;
+    if (team && team !== "Implementor") return { team, label: team };
+    return implOwner(c);
+  };
 
-  // Prior payroll window (Data team): see priorPayrollState in views-data.js.
+  /* Prior payroll window, one per company (see priorPayrollState). */
   const sysBy = Object.fromEntries(sysRows.map((s) => [s.dsp_short_code, s]));
   const feinBy = Object.fromEntries(profRows.filter((p) => p.fein).map((p) => [p.dsp_short_code, String(p.fein)]));
   const apiBy = {};
   apiRows.forEach((r) => { (apiBy[r.fein] = apiBy[r.fein] || {})[r.module_key] = r; });
-  const seenFein = new Set();
-  const prior = clients.map((c) => {
+  const seenFein = new Set(), priorBy = {};
+  clients.forEach((c) => {
     const s = sysBy[c.short_code];
     const fein = feinBy[c.short_code] || (s && s.fein ? String(s.fein) : "");
-    if (!fein || seenFein.has(fein)) return null;   // one row per company, not per CRM duplicate
+    if (!fein || seenFein.has(fein)) return;
     const st = priorPayrollState(c, s, apiBy[fein]);
-    if (st) seenFein.add(fein);
-    return st && { c, st };
-  }).filter(Boolean);
-  const priorOpen = prior.filter((x) => x.st.phase === "window").sort((a, b) => a.st.daysLeft - b.st.daysLeft);
-  const priorNext = prior.filter((x) => x.st.phase === "next");
-  const tick = (d) => d ? `<span class="pill pill-done">✓ ${esc(String(d).slice(5, 10))}</span>` : `<span class="muted">—</span>`;
-  const priorRows = priorOpen.map(({ c, st }) => `<tr>
-      <td>${clientLink(c)}</td><td>${fmtDate(st.start)}</td><td>${fmtDate(st.due)}</td><td>${priorLeftHtml(st)}</td>
-      <td>${tick(st.census)}</td><td>${tick(st.payment)}</td><td>${tick(st.deductions)}</td>
-      <td>${st.priorTried ? `<span class="pill pill-onhold" title="last attempt ${esc(st.priorTried.last_run_date || "")}">${esc(st.priorTried.run_status || "tried")}</span>` : `<span class="muted">not run</span>`}</td></tr>`)
-    .concat(priorNext.map(({ c, st }) => `<tr class="muted">
-      <td>${clientLink(c)}</td><td colspan="3"><span class="muted">Waiting for the first punch — the week starts then</span></td>
-      <td>${tick(st.census)}</td><td>${tick(st.payment)}</td><td>${tick(st.deductions)}</td><td><span class="muted">—</span></td></tr>`));
-
-  const soonRows = soon.map((c) => `<tr>
-      <td>${clientLink(c)}</td><td><b>${countdownLabel(daysUntil(c.tt_live_date))}</b></td>
-      <td>${fmtDate(c.tt_live_date)}</td><td>${esc(c.implementor?.name || "—")}</td>
-      <td><span class="bar"><span style="width:${pct(c.tasks)}%"></span></span> ${pct(c.tasks)}%</td>
-      <td>${clientStatusPill(c.status)}</td></tr>`);
-  const overdueRows = overdue.map((t) => `<tr>
-      <td>${clientLink(t._client)}</td><td>${esc(t.title)}</td>
-      <td>${esc(effectiveOwnerLabel(t, t._client))}</td><td class="overdue">${fmtDate(t.due_date)}</td>
-      <td>${statusPill(t.status)}</td></tr>`);
-  const unownedRows = unowned.map(({ c, open }) => `<tr>
-      <td>${clientLink(c)}</td>
-      <td><b>${countdownLabel(daysUntil(c.tt_live_date))}</b></td>
-      <td>${open} open task${open === 1 ? "" : "s"}</td></tr>`);
-  const riskRows = atRisk.map((c) => `<tr>
-      <td>${clientLink(c)}</td><td><span class="rag rag-${c.rag || "none"}"></span> ${esc(c.rag || "—")}</td>
-      <td>${clientStatusPill(c.status)}</td><td>${fmtDate(c.tt_live_date)}</td>
-      <td>${esc(c.implementor?.name || "—")}</td></tr>`);
-  const gapRows = auditGap.map((c) => {
-    const openAudit = (c.tasks || []).filter((t) => t.template?.phase === "audit" && openish(t));
-    return `<tr><td>${clientLink(c)}</td>
-      <td>${countdownLabel(daysUntil(c.tt_live_date))}</td>
-      <td>${openAudit.map((t) => `<span class="chip">${esc(t.title)}</span>`).join(" ")}</td></tr>`;
-  });
-  const staleRows = stale.map((c) => {
-    const days = quietDays(c);
-    return `<tr><td>${clientLink(c)}</td>
-      <td>${days === null ? "no activity yet" : days + " days quiet"}</td>
-      <td>${esc(c.implementor?.name || "—")}</td><td>${esc(c.status)}</td></tr>`;
+    if (st) { seenFein.add(fein); priorBy[c.id] = st; }
   });
 
-  // Compact digest: top rows visible, rest behind "Show all"; chronic lists start collapsed.
-  const CAP = 8;
-  const capTable = (id, head, rowArr) => {
-    const rows = rowArr.map((r, i) =>
-      i >= CAP ? r.replace("<tr>", `<tr class="cap-hide" data-cap="${id}">`) : r).join("");
-    const more = rowArr.length > CAP
-      ? `<div class="cap-more"><button type="button" class="linkish" data-capbtn="${id}">Show all ${rowArr.length}</button></div>`
-      : "";
-    return `<div style="overflow-x:auto"><table class="grid"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>${more}`;
+  const items = [];
+  const add = (o) => items.push(o);
+  active.forEach((c) => {
+    const open = (c.tasks || []).filter(openish);
+    const impl = implOwner(c);
+    if (PAUSED_STATUSES.includes(c.status)) {
+      add({ lane: "waiting", client: c, owner: impl, kind: "paused",
+            title: `Client ${c.status.toLowerCase()} · ${open.length} open task${open.length === 1 ? "" : "s"} parked` });
+      return;
+    }
+    const gl = c.tt_live_date, dl = daysUntil(gl);
+    open.forEach((t) => {
+      if (/^Prior Pay/i.test(t.title) && priorBy[c.id]) return;   // the window item below covers it
+      const owner = ownerOf(t, c);
+      let due = t.due_date || null, why = t.due_date ? "due date set on the task" : "";
+      if (!due && /^Prior Pay/i.test(t.title) && gl) {
+        // No punch data for this company: punches start around go-live.
+        due = addDays(gl, PRIOR_WINDOW_DAYS);
+        why = `${PRIOR_WINDOW_DAYS} days after go-live (${gl}); no punch data yet`;
+      } else if (!due && t.template && gl) {
+        const stage = t.template.phase === "audit" ? "audit" : SETUP_TASKS.includes(t.title) ? "setup" : "mig";
+        due = addDays(gl, TODAY_OFFSETS[stage]);
+        why = `${-TODAY_OFFSETS[stage]} days before go-live (${gl})`;
+      }
+      if (!due) { add({ lane: "nodate", client: c, title: t.title, owner }); return; }
+      const d = daysUntil(due);
+      const base = { due, d, client: c, title: t.title, owner, why, status: t.status };
+      if (d < 0) add({ lane: "overdue", ...base });
+      else if (d <= TODAY_WEEK) add({ lane: "week", ...base });
+      else if (t.status === "In Progress") add({ lane: "flight", ...base, sub: `due ${fmtDate(due)}` });
+    });
+    const st = priorBy[c.id];
+    if (st && st.phase === "window") {
+      const d = daysUntil(st.due);
+      add({ lane: d < 0 ? "overdue" : d <= TODAY_WEEK ? "week" : "flight", due: st.due, d, client: c,
+            title: "Prior payroll upload", owner: { team: "Data Team", label: "Data Team" },
+            why: `${PRIOR_WINDOW_DAYS} days after the first punch (${st.start})`, sub: `due ${fmtDate(st.due)}` });
+    } else if (st && st.phase === "next") {
+      add({ lane: "waiting", client: c, owner: { team: "Data Team", label: "Data Team" }, kind: "punch",
+            title: "Prior payroll · waiting for the first punch" });
+    }
+    if (!isLive(c) && gl) {
+      if (dl < 0) add({ lane: "overdue", due: gl, d: dl, client: c, owner: impl, kind: "golive",
+                        title: "Go-live date passed · mark Live or move the date", why: "TT live date" });
+      else if (dl <= TODAY_WEEK) add({ lane: "week", due: gl, d: dl, client: c, owner: impl, kind: "golive",
+                                       title: "Go-live", why: "TT live date" });
+    }
+    if (!c.implementor_id && !isLive(c) && dl !== null && dl >= 0 && dl <= UNOWNED_WINDOW_DAYS) {
+      add({ lane: "waiting", client: c, owner: { label: "Admin" }, kind: "assign",
+            title: `No implementer · go-live in ${dl} day${dl === 1 ? "" : "s"}` });
+    }
+    if (c.status === "Live" && gl && dl !== null && dl <= 0 && dl > -HYPERCARE_DAYS) {
+      add({ lane: "flight", client: c, owner: impl, kind: "hyper",
+            title: "First payrolls after go-live", sub: `day ${1 - dl} of ${HYPERCARE_DAYS}` });
+    }
+    const q = quietDays(c);
+    if (!isLive(c) && (q === null || q >= STALE_DAYS)) {
+      add({ lane: "waiting", client: c, owner: impl, kind: "quiet",
+            title: q === null ? "No activity logged yet" : `No activity in ${q} days` });
+    }
+  });
+
+  /* Scope: Mine / Data team / Everyone, remembered per browser. */
+  let scope = (() => { try { return localStorage.getItem(TODAY_SCOPE_KEY); } catch { return null; } })();
+  const mineItem = (it) => (it.owner?.user && it.owner.user === me.id) || (it.owner?.team && myTeams.includes(it.owner.team));
+  if (!scope) scope = items.some(mineItem) ? "mine" : "all";
+  const inScope = (it) => scope === "all" ? true : scope === "data" ? it.owner?.team === "Data Team" : mineItem(it);
+  const dataMail = new Set(teams["Data Team"] || []);
+  const mailInScope = (m) => scope === "all" ? true : scope === "data" ? dataMail.has(String(m.mailbox).toLowerCase())
+    : String(m.mailbox).toLowerCase() === myEmail;
+
+  const clientLink = (c) => `<a href="#client/${c.id}">${esc(c.dsp_name)}</a>${c.rag === "R" || c.rag === "A"
+    ? ` <span class="rag rag-${c.rag}" title="RAG ${c.rag}"></span>` : ""}`;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const lateLabel = (d) => `${plural(-d, "day")} late`;
+  const soonLabel = (d) => d === 0 ? "today" : d === 1 ? "tomorrow" : `in ${d} days`;
+  const dayHead = (iso) => {
+    const d = daysUntil(iso);
+    if (d === 0) return "Today";
+    if (d === 1) return "Tomorrow";
+    return new Date(iso + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
   };
-  const section = (id, title, rowArr, head, open) => rowArr.length
-    ? `<details id="sec-${id}" class="card today-sec"${open ? " open" : ""}>
-        <summary>${title}<span class="cnt">${rowArr.length}</span></summary>
-        <div class="sec-body">${capTable(id, head, rowArr)}</div>
-      </details>`
-    : "";
-  const chip = (id, label, count, tone) => count
-    ? `<button type="button" class="tstat ${tone}" data-jump="sec-${id}">${label} <b>${count}</b></button>`
-    : "";
+  const owners = (list) => [...new Set(list.map((x) => x.owner?.label).filter(Boolean))].join(", ");
+  const groupByClient = (list) => {
+    const m = new Map();
+    list.forEach((x) => { const g = m.get(x.client.id) || { client: x.client, items: [] }; g.items.push(x); m.set(x.client.id, g); });
+    return [...m.values()];
+  };
+  const capRows = (id, rows) => rows.map((r, i) => i >= TODAY_CAP ? r.replace('class="td-row', `data-cap="${id}" class="cap-hide td-row`) : r).join("") +
+    (rows.length > TODAY_CAP ? `<div class="cap-more"><button type="button" class="linkish" data-capbtn="${id}">Show all ${rows.length}</button></div>` : "");
+  const detail = (list) => `<div class="td-detail">${list.map((x) => `<div><span>${esc(x.title)}</span>
+      <span class="muted">${esc(x.owner?.label || "")}${x.due ? ` · due ${fmtDate(x.due)}` : ""}${x.why ? ` · ${esc(x.why)}` : ""}</span></div>`).join("")}</div>`;
 
-  const total = soon.length + overdue.length + unowned.length + atRisk.length + auditGap.length + stale.length + prior.length;
-  const priorLate = priorOpen.filter((x) => x.st.daysLeft <= 0).length;
-  view.innerHTML = `<div class="page-head"><h1>Today</h1>
-      <span class="muted">${new Date().toDateString()}</span></div>` +
-    (total === 0
-      ? `<p class="muted" style="font-size:15px">Nothing needs attention. 🎉</p>`
-      : `<div class="today-strip">` +
-          chip("prior", "Prior payroll", priorOpen.length, priorLate ? "warn" : "amber") +
-          chip("soon", "Going live", soon.length, "go") +
-          chip("overdue", "Overdue", overdue.length, "warn") +
-          chip("unowned", "No implementor", unowned.length, "amber") +
-          chip("risk", "At risk", atRisk.length, "amber") +
-          chip("gap", "Audit gaps", auditGap.length, "warn") +
-          chip("stale", "Gone quiet", stale.length, "") +
-        `</div>`) +
-    section("prior", `Prior payroll window <span class="muted" style="font-weight:400;font-size:13px">· Data team · due ${PRIOR_WINDOW_DAYS} days after the first punch</span>`, priorRows,
-      `<th>Client</th><th>First punch</th><th>Due</th><th>Left</th><th>Census</th><th>Payment</th><th>Deductions</th><th>Prior payroll</th>`, true) +
-    section("soon", "Going live soon", soonRows,
-      `<th>Client</th><th>Countdown</th><th>TT live</th><th>Implementor</th><th>Checklist</th><th>Status</th>`, true) +
-    section("overdue", "Overdue", overdueRows,
-      `<th>Client</th><th>Task</th><th>Owner</th><th>Due</th><th>Status</th>`, true) +
-    section("unowned", `No implementor (go-live ≤ ${UNOWNED_WINDOW_DAYS}d)`, unownedRows,
-      `<th>Client</th><th>Go-live</th><th>Open work</th>`, true) +
-    section("risk", "At risk / stalled", riskRows,
-      `<th>Client</th><th>RAG</th><th>Status</th><th>TT live</th><th>Implementor</th>`, false) +
-    section("gap", "Audit gaps before go-live", gapRows,
-      `<th>Client</th><th>Countdown</th><th>Open audit items</th>`, false) +
-    section("stale", "Gone quiet", staleRows,
-      `<th>Client</th><th>Silence</th><th>Implementor</th><th>Status</th>`, false);
+  const render = () => {
+    const S = items.filter(inScope);
+    const lane = (k) => S.filter((x) => x.lane === k);
+    const overdue = lane("overdue"), week = lane("week"), flight = lane("flight"), waiting = lane("waiting"), nodate = lane("nodate");
+    const dueToday = week.filter((x) => x.d === 0);
+    const mail = mailRows ? mailRows.filter(mailInScope) : null;
+    const needReply = mail ? mail.filter((m) => m.state === "needs_reply") : [];
 
-  view.querySelectorAll("[data-jump]").forEach((b) => (b.onclick = () => {
-    const d = document.getElementById(b.dataset.jump);
-    if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth", block: "start" }); }
-  }));
-  view.querySelectorAll("[data-capbtn]").forEach((b) => (b.onclick = () => {
-    view.querySelectorAll(`[data-cap="${b.dataset.capbtn}"]`).forEach((tr) => tr.classList.remove("cap-hide"));
-    b.closest(".cap-more").remove();
-  }));
+    /* Overdue: one row per client, most late first. */
+    const lateGroups = groupByClient(overdue).map((g) => ({ ...g, worst: Math.min(...g.items.map((x) => x.d)) }))
+      .sort((a, b) => a.worst - b.worst);
+    const lateRows = lateGroups.map((g) => {
+      const it = g.items.sort((a, b) => a.d - b.d);
+      return `<div class="td-row td-click" tabindex="0">
+        <span class="td-c">${clientLink(g.client)}</span>
+        <span class="td-t">${esc(it[0].title)}${it.length > 1 ? ` <span class="muted">+${it.length - 1} more</span>` : ""}
+          <span class="td-o">${esc(owners(it))}</span></span>
+        <span class="td-pill bad">${lateLabel(g.worst)}</span>${detail(it)}</div>`;
+    });
+
+    /* This week: by day, then by client. */
+    const days = [...new Set(week.map((x) => x.due))].sort();
+    const weekHtml = days.map((day) => {
+      const groups = groupByClient(week.filter((x) => x.due === day));
+      return `<div class="td-day">${esc(dayHead(day))}</div>` + groups.map((g) => {
+        const it = g.items.sort((a, b) => (b.kind === "golive") - (a.kind === "golive"));
+        const d = it[0].d;
+        return `<div class="td-row td-click" tabindex="0">
+          <span class="td-c">${clientLink(g.client)}</span>
+          <span class="td-t">${esc(it[0].title)}${it.length > 1 ? ` <span class="muted">+${it.length - 1} more</span>` : ""}
+            <span class="td-o">${esc(owners(it))}</span></span>
+          <span class="td-pill ${d === 0 ? "warn" : ""}">${soonLabel(d)}</span>${detail(it)}</div>`;
+      }).join("");
+    }).join("");
+
+    const simpleRows = (list, pill) => list.map((x) => `<div class="td-row">
+        <span class="td-c">${clientLink(x.client)}</span>
+        <span class="td-t">${esc(x.title)}<span class="td-o">${esc(x.owner?.label || "")}</span></span>
+        <span class="td-pill">${esc(pill(x))}</span></div>`);
+    const flightRows = simpleRows(flight, (x) => x.sub || x.status || "");
+    const WAIT_ORDER = { paused: 0, assign: 1, punch: 2, quiet: 3 };
+    const waitRows = simpleRows(waiting.sort((a, b) => (WAIT_ORDER[a.kind] ?? 9) - (WAIT_ORDER[b.kind] ?? 9)),
+      (x) => ({ paused: "client", assign: "assign", punch: "first punch", quiet: "quiet" }[x.kind] || ""));
+
+    /* Mail */
+    const MAIL_ORDER = { needs_reply: 0, waiting: 1, fyi: 2 };
+    const MAIL_PILL = { needs_reply: ["needs reply", "bad"], waiting: ["waiting", "warn"], fyi: ["FYI", ""] };
+    const ago = (iso) => { const h = Math.round((Date.now() - new Date(iso)) / 3600000);
+      return h < 1 ? "just now" : h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`; };
+    const mailHtml = mail === null
+      ? `<p class="muted td-empty">Mail sync is not set up yet.</p>`
+      : !mail.length ? `<p class="muted td-empty">No client mail in the last 7 days.</p>`
+      : capRows("mail", mail.slice().sort((a, b) => (MAIL_ORDER[a.state] - MAIL_ORDER[b.state]) || String(b.last_date).localeCompare(String(a.last_date)))
+          .map((m) => { const [lab, tone] = MAIL_PILL[m.state] || ["", ""];
+            const subj = String(m.mailbox).toLowerCase() === myEmail && /^https:\/\/mail\.google\.com\//.test(m.gmail_url || "")
+              ? `<a href="${esc(m.gmail_url)}" target="_blank" rel="noopener">${esc(m.subject)}</a>` : esc(m.subject);
+            return `<div class="td-row td-mail"><span class="td-pill ${tone}">${lab}</span>
+              <span class="td-t"><b>${esc(m.client_name || "")}</b> · ${subj}
+              <span class="td-o">last: ${esc(m.last_from || "")} · ${ago(m.last_date)}${scope !== "mine" ? ` · ${esc(String(m.mailbox).split("@")[0])}'s inbox` : ""}</span></span></div>`; }));
+
+    /* Done this week */
+    const weekAgo = addDays(todayIso, -7);
+    const doneTasks = active.flatMap((c) => (c.tasks || []).filter((t) => t.status === "Done" && t.done_date && t.done_date >= weekAgo)
+      .map((t) => ({ owner: ownerOf(t, c) }))).filter(inScope).length;
+    const wentLive = active.filter((c) => c.status === "Live" && c.tt_live_date && c.tt_live_date >= weekAgo && c.tt_live_date <= todayIso)
+      .filter((c) => inScope({ owner: implOwner(c) })).length;
+
+    const late = overdue.length, soon = week.length;
+    const headline = late
+      ? `${plural(late, "thing")} ${late === 1 ? "is" : "are"} late. ${soon ? `${soon} due this week.` : "Nothing else due this week."}`
+      : soon ? `Nothing is late. ${soon} due this week.` : "Nothing is late and nothing is due this week.";
+    const lanePanel = (id, icon, title, rows, empty, cls = "") => `<section id="lane-${id}" class="card td-lane ${cls}">
+        <h2>${icon} ${title}<span class="cnt">${rows.length}</span></h2>
+        ${rows.length ? capRows(id, rows) : `<p class="muted td-empty">${empty}</p>`}</section>`;
+    const k = (id, label, n, tone) => `<button type="button" class="td-k ${n ? tone : ""}" data-jump="lane-${id}">${label}<b>${n}</b></button>`;
+    const SCOPES = [["mine", "Mine"], ["data", "Data team"], ["all", "Everyone"]];
+
+    view.innerHTML = `<div class="td-head">
+        <div><h1>${esc(headline)}</h1>
+          <span class="muted">${new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}${needReply.length ? ` · ${plural(needReply.length, "mail")} waiting for your reply` : ""}</span></div>
+        <div class="td-scope" role="group" aria-label="Whose work">${SCOPES.map(([v, l]) =>
+          `<button type="button" class="${scope === v ? "on" : ""}" data-scope="${v}">${l}</button>`).join("")}</div></div>
+      <div class="td-ks">
+        ${k("overdue", "Overdue", late, "bad")}${k("week", "Due today", dueToday.length, "warn")}
+        ${k("week", "Next 7 days", soon - dueToday.length, "")}${k("waiting", "Waiting on others", waiting.length, "")}
+        ${k("flight", "In flight", flight.length, "")}</div>
+      <div class="td-grid"><div>
+        ${lanePanel("overdue", "⚠", `Overdue <span class="muted td-sub">· ${plural(lateGroups.length, "client")}, most late first</span>`, lateRows, "Nothing is late.", "td-bad")}
+        <section id="lane-week" class="card td-lane"><h2>📅 This week<span class="cnt">${soon}</span></h2>
+          ${soon ? weekHtml : `<p class="muted td-empty">Nothing due in the next ${TODAY_WEEK} days.</p>`}
+          ${nodate.length ? `<p class="muted td-foot">${plural(nodate.length, "open task")} ${nodate.length === 1 ? "has" : "have"} no date: the client has no go-live date set.</p>` : ""}</section>
+        ${lanePanel("flight", "▶", "In flight", flightRows, "Nothing in progress right now.")}
+        ${lanePanel("waiting", "⏳", "Waiting on others", waitRows, "Nothing is stuck.")}
+      </div><div>
+        <section id="lane-mail" class="card td-lane"><h2>✉ Mail <span class="muted td-sub">· last 7 days</span><span class="cnt">${mail ? mail.length : 0}</span></h2>${mailHtml}</section>
+        <section class="card td-lane"><h2>✓ Done this week</h2>
+          <p class="td-done"><b>${doneTasks}</b> tasks closed · <b>${wentLive}</b> went live</p></section>
+      </div></div>`;
+
+    view.querySelectorAll("[data-scope]").forEach((b) => (b.onclick = () => {
+      scope = b.dataset.scope;
+      try { localStorage.setItem(TODAY_SCOPE_KEY, scope); } catch { /* private mode */ }
+      render();
+    }));
+    view.querySelectorAll("[data-jump]").forEach((b) => (b.onclick = () =>
+      document.getElementById(b.dataset.jump)?.scrollIntoView({ behavior: "smooth", block: "start" })));
+    view.querySelectorAll("[data-capbtn]").forEach((b) => (b.onclick = () => {
+      view.querySelectorAll(`[data-cap="${b.dataset.capbtn}"]`).forEach((r) => r.classList.remove("cap-hide"));
+      b.closest(".cap-more").remove();
+    }));
+    view.querySelectorAll(".td-click").forEach((r) => {
+      const toggle = (e) => { if (e.target.closest("a")) return; r.classList.toggle("open"); };
+      r.onclick = toggle;
+      r.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e); } };
+    });
+  };
+  render();
 };
 
 Views.renderAuditStatus = async (view) => {
