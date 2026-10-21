@@ -210,8 +210,29 @@ Views.renderToday = async (view) => {
   const lastByClient = Object.fromEntries(lastAct.map((r) => [r.client_id, r.last_activity]));
   const openish = (t) => t.status === "Open" || t.status === "In Progress";
   const isLive = (c) => c.status === "Live" || c.status === "Completed";
-  const active = clients.filter((c) => c.status !== "Completed" && c.status !== "Cancelled");
   const todayIso = localIso(new Date());
+  /* One record per short code. The CRM holds the same DSP more than once
+     (WEE1 three times); Today shows the record the work is happening on -
+     Live first, then most tasks done, then latest activity - and flags the
+     rest so someone cancels them. */
+  const doneCount = (c) => (c.tasks || []).filter((t) => t.status === "Done").length;
+  const dupes = [];
+  const active = (() => {
+    const all = clients.filter((c) => c.status !== "Completed" && c.status !== "Cancelled");
+    const byCode = new Map();
+    all.forEach((c) => {
+      const k = String(c.short_code || "").trim().toUpperCase() || `id:${c.id}`;
+      (byCode.get(k) || byCode.set(k, []).get(k)).push(c);
+    });
+    return [...byCode.values()].map((list) => {
+      if (list.length === 1) return list[0];
+      const rank = (c) => [isLive(c) ? 1 : 0, doneCount(c), String(lastByClient[c.id] || c.created_at || "")];
+      list.sort((a, b) => { const x = rank(a), y = rank(b);
+        return (y[0] - x[0]) || (y[1] - x[1]) || y[2].localeCompare(x[2]); });
+      dupes.push({ keep: list[0], extra: list.slice(1) });
+      return list[0];
+    });
+  })();
   const addDays = (iso, n) => { const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n); return localIso(d); };
   const quietDays = (c) => {
     const last = lastByClient[c.id] || c.created_at;
@@ -303,6 +324,9 @@ Views.renderToday = async (view) => {
     }
   });
 
+  dupes.forEach(({ keep, extra }) => add({ lane: "waiting", client: keep, owner: { label: "Admin" }, kind: "dupe",
+    title: `${extra.length + 1} CRM records share code ${keep.short_code} · cancel ${extra.map((c) => `"${c.dsp_name}"`).join(", ")}` }));
+
   /* Scope: Mine / Data team / Everyone, remembered per browser. */
   let scope = (() => { try { return localStorage.getItem(TODAY_SCOPE_KEY); } catch { return null; } })();
   const mineItem = (it) => (it.owner?.user && it.owner.user === me.id) || (it.owner?.team && myTeams.includes(it.owner.team));
@@ -374,9 +398,9 @@ Views.renderToday = async (view) => {
         <span class="td-t">${esc(x.title)}<span class="td-o">${esc(x.owner?.label || "")}</span></span>
         <span class="td-pill">${esc(pill(x))}</span></div>`);
     const flightRows = simpleRows(flight, (x) => x.sub || x.status || "");
-    const WAIT_ORDER = { paused: 0, assign: 1, punch: 2, quiet: 3 };
+    const WAIT_ORDER = { dupe: 0, paused: 1, assign: 2, punch: 3, quiet: 4 };
     const waitRows = simpleRows(waiting.sort((a, b) => (WAIT_ORDER[a.kind] ?? 9) - (WAIT_ORDER[b.kind] ?? 9)),
-      (x) => ({ paused: "client", assign: "assign", punch: "first punch", quiet: "quiet" }[x.kind] || ""));
+      (x) => ({ dupe: "duplicate", paused: "client", assign: "assign", punch: "first punch", quiet: "quiet" }[x.kind] || ""));
 
     /* Mail */
     const MAIL_ORDER = { needs_reply: 0, waiting: 1, fyi: 2 };
@@ -679,7 +703,7 @@ Views.renderClientDetail = async (view, id) => {
                title="Open this client's folder under Amazon DSP in Google Drive">📁 Drive folder</a>`
           : isAdmin ? `<span class="muted" style="font-size:12px">No Drive folder linked — add it under Details</span>` : ""}
         <button type="button" class="btn-refresh" id="c-ecr"
-          title="Who changed which employee profile field, when, and from where — the workbook Uzio exports">Employee change report</button>
+          title="Who changed which employee profile or payment method field, when, and from where">Change reports</button>
         <a href="#${isAdmin ? "clients" : "my-clients"}">← back</a>
       </span>
     </div>

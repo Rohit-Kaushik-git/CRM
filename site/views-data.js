@@ -80,6 +80,7 @@ async function runProdRefresh(jobs, onLine) {
  * limit, and load_history is the one job that deletes before it re-inserts, so
  * it gets a call of its own rather than sharing a timeout with six others.
  */
+let refreshBusy = false;
 function refreshControl(batches, label) {
   if (typeof batches[0] === "string") batches = [batches];
   const wrap = document.createElement("span");
@@ -92,7 +93,16 @@ function refreshControl(batches, label) {
   btn.textContent = label || "Refresh from Uzio";
 
   btn.onclick = async () => {
+    // One refresh at a time: two runs share the service account's Uzio
+    // session (a new sign-in ends the other one) and race on the same tables.
+    if (refreshBusy) {
+      status.textContent = "Another refresh is already running. Wait for it to finish.";
+      status.classList.add("refresh-status--error");
+      return;
+    }
+    refreshBusy = true;
     btn.disabled = true;
+    status.classList.remove("refresh-status--error");
     try {
       for (let i = 0; i < batches.length; i++) {
         // It reads prod and rewrites two projects; tens of seconds is normal,
@@ -100,16 +110,29 @@ function refreshControl(batches, label) {
         status.textContent = batches.length > 1
           ? `Reading Uzio… step ${i + 1} of ${batches.length}`
           : "Reading Uzio… this takes up to a minute.";
-        await runProdRefresh(batches[i], (l) => console.log("[prod-refresh]", l));
+        try {
+          await runProdRefresh(batches[i], (l) => console.log("[prod-refresh]", l));
+        } catch (e) {
+          // "Failed to fetch" = no answer at all (network blip, laptop slept,
+          // VPN switch). Every job is safe to re-run, so try that step once more.
+          if (!(e instanceof TypeError)) throw e;
+          status.textContent = `Connection dropped, retrying step ${i + 1}…`;
+          await new Promise((r) => setTimeout(r, 3000));
+          await runProdRefresh(batches[i], (l) => console.log("[prod-refresh]", l));
+        }
       }
       status.textContent = "Done. Reloading…";
       // Re-render from the CRM's now-updated copy.
       location.reload();
     } catch (e) {
       btn.disabled = false;
-      status.textContent = e.message;
+      status.textContent = e instanceof TypeError
+        ? "Couldn't reach the refresh service (network dropped). The last good data is still shown. Try again."
+        : e.message;
       status.classList.add("refresh-status--error");
       console.error("[prod-refresh]", e);
+    } finally {
+      refreshBusy = false;
     }
   };
   return wrap;

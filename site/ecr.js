@@ -285,6 +285,72 @@ const ECR = (() => {
 
 if (typeof module !== "undefined" && module.exports) module.exports = ECR;
 
+/* Payment method change report: one column per saved version (newest first),
+   the employee's payout lines as rows, red where a value differs from the
+   version before. The function returns routing/account numbers as last 4
+   digits only; the change flags were worked out on the full values. */
+const PMR = (() => {
+  const NAMES = { DIRECT_DEPOSIT: "Direct deposit", CHECK: "Check", PAYCARD: "Paycard", RAPIDPAYCARD: "RapidPay card",
+    DAILYPAY: "DailyPay", CHECKING: "Checking", SAVINGS: "Savings", PERCENTAGE: "Percentage", FLAT_DOLLAR: "Flat dollar" };
+  const pretty = (s) => !s ? "" : NAMES[s] || String(s).toLowerCase().replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+  const RED = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC7CE" } };
+  const HEAD = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE8DEF8" } };
+
+  async function toXlsx(versionsOldestFirst, employeeLabel) {
+    const vs = versionsOldestFirst.slice().reverse();
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Payment Method Changes", { views: [{ state: "frozen", xSplit: 1, ySplit: 1 }] });
+    ws.getColumn(1).width = 26;
+    vs.forEach((_, i) => { ws.getColumn(i + 2).width = 30; });
+    let r = 1;
+    const row = (label, vals, flags, head) => {
+      const a = ws.getCell(r, 1);
+      a.value = label; a.font = { bold: true };
+      if (head) a.fill = HEAD;
+      vals.forEach((v, i) => {
+        const c = ws.getCell(r, i + 2);
+        if (v !== "" && v != null) c.value = v;
+        c.alignment = { wrapText: true, vertical: "top" };
+        if (head) { c.fill = HEAD; c.font = { bold: true }; } else if (flags && flags[i]) c.fill = RED;
+      });
+      r++;
+    };
+    const was = (v, test) => !v.first && v.changed.some(test);
+    row("Version", vs.map((_, i) => i === 0 ? "Current" : `Version ${vs.length - i}`), null, true);
+    row("Changed on", vs.map((v) => ECR.modifiedOn(v.created_date)));
+    row("Changed by", vs.map((v) => v.who_changed || ""));
+    row("Source", vs.map((v) => v.source === "USER_INTERFACE" ? "User interface" : v.source || ""));
+    row("Payment method", vs.map((v) => [...new Set(v.accounts.map((a) => pretty(a.method)))].join(", ") || "None"),
+      vs.map((v) => was(v, (c) => c.method)));
+    row("Paycheck distribution", vs.map((v) => pretty((v.accounts.find((a) => a.distribution) || {}).distribution)),
+      vs.map((v) => was(v, (c) => c.distribution)));
+    const n = Math.max(0, ...vs.map((v) => Math.max(v.accounts.length, v.changed.length)));
+    for (let k = 0; k < n; k++) {
+      row(`Account ${k + 1}`, vs.map(() => ""), null, true);
+      const line = (field, label, show) => row(label,
+        vs.map((v) => v.accounts[k] ? show(v.accounts[k]) : k < v.changed.length ? "(removed)" : ""),
+        vs.map((v) => !v.first && !!(v.changed[k] || {})[field]));
+      line("method", "Payment method", (a) => pretty(a.method));
+      line("type", "Account type", (a) => pretty(a.type));
+      line("routing", "Routing number", (a) => a.routing);
+      line("account", "Account number", (a) => a.account);
+      line("amount", "Paycheck amount", (a) => a.amount ? `$${Number(a.amount).toFixed(2)}` : "");
+      line("percentage", "Percentage", (a) => a.percentage ? `${Number(a.percentage)}%` : "");
+      line("priority", "Priority", (a) => a.priority);
+    }
+    r++;
+    ws.getCell(r, 1).value = `${employeeLabel}. Routing and account numbers show the last 4 digits only. ` +
+      "Red = different from the version before (compared on the full number).";
+    ws.getCell(r, 1).font = { italic: true, size: 9 };
+    return wb.xlsx.writeBuffer();
+  }
+
+  function filename(when, employee) {
+    return ECR.filename(when, employee).replace("Employee Profile Change Report", "Payment Method Change Report");
+  }
+  return { toXlsx, filename };
+})();
+
 /* ---- the drawer (browser only) ---- */
 const OPS_TOKEN_KEY = "uzio_ops_token", OPS_USER_KEY = "uzio_ops_user";
 const ECR_BATCH_LIMIT = 300, ECR_SECONDS_EACH = 4;
@@ -313,8 +379,8 @@ function changeReportDrawer(client, fein) {
   const d = document.createElement("div");
   d.id = "log-drawer";
   d.innerHTML = `<div class="ld-backdrop"></div><aside class="ld-panel" role="dialog" aria-label="Employee profile change report">
-    <div class="ld-head"><div><h2 style="margin:0">Employee profile change report</h2>
-      <span class="muted" style="font-size:12px">${esc(client.dsp_name)}${fein ? ` · FEIN ${esc(fein)}` : ""} · the same workbook Uzio exports</span></div>
+    <div class="ld-head"><div><h2 style="margin:0">Employee change reports</h2>
+      <span class="muted" style="font-size:12px">${esc(client.dsp_name)}${fein ? ` · FEIN ${esc(fein)}` : ""} · profile and payment method history</span></div>
       <button type="button" class="linkish ld-x" aria-label="Close">✕</button></div>
     <div class="ld-body"></div></aside>`;
   document.body.appendChild(d);
@@ -356,6 +422,7 @@ function changeReportDrawer(client, fein) {
   };
 
   let matches = [];
+  let kind = "profile";   // profile | payment | both
   const picked = new Set();
   const showSearch = () => {
     body.innerHTML = `<div class="muted" style="font-size:12px;display:flex;gap:8px;align-items:center;margin-bottom:12px">
@@ -366,18 +433,26 @@ function changeReportDrawer(client, fein) {
           <label style="display:flex;flex-direction:column;gap:4px;font-size:12px" class="muted">Company FEIN
             <input id="ecr-fein" value="${esc(fein || "")}" placeholder="9 digits" style="width:150px"></label>
           <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;flex:1;min-width:220px" class="muted">Employee IDs (optional — leave empty for everyone)
-            <textarea id="ecr-ids" rows="2" placeholder="1020, BH0KS5HPZ — commas, new lines or a column pasted from Excel"></textarea></label>
+            <textarea id="ecr-ids" rows="3" placeholder="1020, BH0KS5HPZ — commas, new lines or a column pasted from Excel"></textarea></label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px" class="muted">Report
+            <select id="ecr-kind" style="width:190px">
+              <option value="profile"${kind === "profile" ? " selected" : ""}>Profile changes</option>
+              <option value="payment"${kind === "payment" ? " selected" : ""}>Payment method changes</option>
+              <option value="both"${kind === "both" ? " selected" : ""}>Both</option></select></label>
           <button type="submit" style="margin-top:18px">Search</button>
         </div></form>
       <div id="ecr-results"></div>`;
     $("#ecr-out").onclick = () => { ssSet(OPS_TOKEN_KEY, null); showLogin(); };
     $("#ecr-find").onsubmit = (e) => { e.preventDefault(); search(); };
+    $("#ecr-kind").onchange = (e) => { kind = e.target.value; footer(); };
     if (fein) search();
   };
 
   const search = async () => {
     const box = $("#ecr-results");
-    const ids = $("#ecr-ids").value.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+    // Commas, semicolons, new lines, tabs or a column pasted from Excel; IDs
+    // are matched case-blind, so "bh0ks5hpz" finds BH0KS5HPZ.
+    const ids = [...new Set($("#ecr-ids").value.split(/[\s,;]+/).map((s) => s.trim().toUpperCase()).filter(Boolean))];
     const f = $("#ecr-fein").value.replace(/\D/g, "");
     if (!f && !ids.length) { box.innerHTML = `<p class="overdue">Enter the company FEIN, or at least one Employee ID.</p>`; return; }
     box.innerHTML = `<p class="muted">Searching…</p>`;
@@ -385,9 +460,11 @@ function changeReportDrawer(client, fein) {
       const out = await call({ action: "ecr_find", feins: f ? [f] : [], ids });
       matches = out.employees || [];
       picked.clear();
+      // IDs typed in = those are the employees wanted; tick them all.
+      if (ids.length) matches.slice(0, ECR_BATCH_LIMIT).forEach((m) => picked.add(m.employee_code));
       const notes = [];
       if ((out.unknownFeins || []).length) notes.push(`No company in Uzio has FEIN ${out.unknownFeins.join(", ")}.`);
-      const seen = new Set(matches.flatMap((m) => [String(m.ext_employee_code), String(m.found_via || "").replace("was ", "")]));
+      const seen = new Set(matches.flatMap((m) => [String(m.ext_employee_code).toUpperCase(), String(m.found_via || "").replace("was ", "").toUpperCase()]));
       const missing = ids.filter((i) => !seen.has(i));
       if (missing.length) notes.push(`No employee found for: ${missing.join(", ")}`);
       renderResults(notes);
@@ -435,7 +512,7 @@ function changeReportDrawer(client, fein) {
   };
 
   const footer = () => {
-    const n = picked.size, mins = (n * ECR_SECONDS_EACH) / 60;
+    const n = picked.size, mins = (n * ECR_SECONDS_EACH * (kind === "both" ? 2 : 1)) / 60;
     const go = $("#ecr-go"), hint = $("#ecr-hint");
     if (!go) return;
     go.textContent = `Generate ${n || ""} report${n === 1 ? "" : "s"}`.replace("  ", " ");
@@ -455,14 +532,24 @@ function changeReportDrawer(client, fein) {
       await ecrLoadLibs();
       const stamp = new Date();
       const built = [], skipped = [];
+      const wantProfile = kind !== "payment", wantPayment = kind !== "profile";
       for (let i = 0; i < codes.length; i++) {
         const m = byCode[codes[i]] || {};
         const label = m.full_name || m.ext_employee_code || codes[i];
+        const tag = m.ext_employee_code || label;
         out.innerHTML = `<div class="ld-banner">Reading change history — ${esc(label)} (${i + 1} of ${codes.length})</div>`;
-        const r = await call({ action: "ecr_versions", employeeCode: codes[i] });
-        if (!r.versions.length) { skipped.push(label); continue; }
-        const buf = await ECR.toXlsx(ECR.buildGrid(r.versions, r.contacts));
-        built.push({ label, name: ECR.filename(stamp, m.ext_employee_code || label), buf, versions: r.versions.length });
+        if (wantProfile) {
+          const r = await call({ action: "ecr_versions", employeeCode: codes[i] });
+          if (!r.versions.length) skipped.push(`${label} (profile)`);
+          else built.push({ label, what: "Profile", name: ECR.filename(stamp, tag), versions: r.versions.length,
+                            buf: await ECR.toXlsx(ECR.buildGrid(r.versions, r.contacts)) });
+        }
+        if (wantPayment) {
+          const r = await call({ action: "pm_versions", employeeCode: codes[i] });
+          if (!r.versions.length) skipped.push(`${label} (payment method)`);
+          else built.push({ label, what: "Payment method", name: PMR.filename(stamp, tag), versions: r.versions.length,
+                            buf: await PMR.toXlsx(r.versions, `${label}${m.ext_employee_code ? ` (${m.ext_employee_code})` : ""}`) });
+        }
       }
       const xlsx = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
       out.innerHTML = (skipped.length ? `<p class="muted" style="font-size:13px">No change history exists for: ${esc(skipped.join(", "))}</p>` : "") +
@@ -471,8 +558,9 @@ function changeReportDrawer(client, fein) {
           <span class="muted" style="font-size:12px"> · one file per employee, newest version in the first column</span>
           <div style="margin:10px 0">${built.length > 1 ? `<button type="button" id="ecr-zip">Download all ${built.length} (.zip)</button>` : ""}</div>
           ${built.map((b, i) => `<div class="act-row"><button type="button" class="linkish" data-dl="${i}">${esc(b.label)}</button>
-            <span class="muted" style="font-size:12px">${b.versions} version${b.versions === 1 ? "" : "s"}</span></div>`).join("")}
-          <p class="muted" style="font-size:12px;margin-bottom:0">SSN and pay fields show "${ECR.ENCRYPTED}" — they are encrypted at rest. The effective date beside a pay field still moves in the version where the rate changed.</p>
+            <span class="muted" style="font-size:12px">${esc(b.what)} · ${b.versions} version${b.versions === 1 ? "" : "s"}</span></div>`).join("")}
+          ${wantProfile ? `<p class="muted" style="font-size:12px;margin-bottom:0">Profile: SSN and pay fields show "${ECR.ENCRYPTED}" — they are encrypted at rest. The effective date beside a pay field still moves in the version where the rate changed.</p>` : ""}
+          ${wantPayment ? `<p class="muted" style="font-size:12px;margin-bottom:0">Payment method: routing and account numbers show the last 4 digits only; red cells changed from the version before.</p>` : ""}
         </div>` : "");
       out.querySelectorAll("[data-dl]").forEach((b) => (b.onclick = () => {
         const x = built[+b.dataset.dl]; ecrDownload(new Blob([x.buf], { type: xlsx }), x.name);
@@ -483,7 +571,7 @@ function changeReportDrawer(client, fein) {
         built.forEach((b) => zip.file(b.name, b.buf));
         const p = (n) => String(n).padStart(2, "0");
         const s = `${stamp.getFullYear()}-${p(stamp.getMonth() + 1)}-${p(stamp.getDate())}-${p(stamp.getHours())}-${p(stamp.getMinutes())}-${p(stamp.getSeconds())}`;
-        ecrDownload(await zip.generateAsync({ type: "blob" }), `Employee Profile Change Reports_${s}.zip`);
+        ecrDownload(await zip.generateAsync({ type: "blob" }), `Employee Change Reports_${s}.zip`);
       };
       if (built.length === 1) ecrDownload(new Blob([built[0].buf], { type: xlsx }), built[0].name);
     } catch (e) {
