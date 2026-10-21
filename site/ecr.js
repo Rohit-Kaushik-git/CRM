@@ -498,7 +498,16 @@ function changeReportDrawer(client, fein) {
       </div><div id="ecr-out-box"></div>` : `<p class="muted">No employees matched.</p>`);
     if (matches.length) footer();
     if (!matches.length) return;
-    $("#ecr-q").oninput = (e) => { filter = e.target.value.trim().toLowerCase(); renderResults(); $("#ecr-q").focus(); };
+    $("#ecr-q").oninput = (e) => {
+      // The list re-renders the box too; put the caret back where it was,
+      // or every keystroke would land at the start of the text.
+      const pos = e.target.selectionStart;
+      filter = e.target.value.trim().toLowerCase();
+      renderResults();
+      const q = $("#ecr-q");
+      q.focus();
+      q.setSelectionRange(pos, pos);
+    };
     $("#ecr-all").onclick = () => { list.forEach((m) => picked.add(m.employee_code)); renderResults(); };
     $("#ecr-none").onclick = () => { picked.clear(); renderResults(); };
     // A tick only updates its own checkbox and the footer, so a long list keeps its scroll.
