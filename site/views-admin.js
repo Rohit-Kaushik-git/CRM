@@ -162,6 +162,17 @@ function journeyHtml(c, opts = {}) {
 
 /* Only Drive links are ever rendered as a link: the field is free text, and a
    javascript: or look-alike URL must not become a clickable button. */
+/* Where a client's logins are kept: a Drive/Docs file or a password-manager
+   entry. The CRM stores only this link, never a password. https only, a known
+   host, and no user:pass@ part, so a pasted secret or a javascript: URL can
+   never become a button. */
+const LOGIN_HOSTS = ["drive.google.com", "docs.google.com", "1password.com", "bitwarden.com", "lastpass.com", "keepersecurity.com"];
+function isLoginsUrl(u) {
+  let x;
+  try { x = new URL(String(u || "").trim()); } catch { return false; }
+  if (x.protocol !== "https:" || x.username || x.password) return false;
+  return LOGIN_HOSTS.some((h) => x.hostname === h || x.hostname.endsWith("." + h));
+}
 function isDriveUrl(u) {
   return /^https:\/\/drive\.google\.com\/[^\s"'<>]*$/.test(String(u || "").trim());
 }
@@ -702,6 +713,10 @@ Views.renderClientDetail = async (view, id) => {
           ? `<a class="btn-refresh" href="${esc(c.drive_folder_url)}" target="_blank" rel="noopener noreferrer"
                title="Open this client's folder under Amazon DSP in Google Drive">📁 Drive folder</a>`
           : isAdmin ? `<span class="muted" style="font-size:12px">No Drive folder linked — add it under Details</span>` : ""}
+        ${isLoginsUrl(c.logins_url)
+          ? `<a class="btn-refresh" href="${esc(c.logins_url)}" target="_blank" rel="noopener noreferrer"
+               title="Opens where this client's logins are kept. The CRM stores only this link, never a password.">🔑 Logins</a>`
+          : ""}
         <button type="button" class="btn-refresh" id="c-ecr"
           title="Who changed which employee profile or payment method field, when, and from where">Change reports</button>
         <a href="#${isAdmin ? "clients" : "my-clients"}">← back</a>
@@ -759,6 +774,9 @@ Views.renderClientDetail = async (view, id) => {
       <label style="grid-column:1/-1">Drive folder
         <input id="c-drive" type="url" placeholder="https://drive.google.com/drive/folders/…"
           value="${esc(c.drive_folder_url || "")}" style="max-width:none" ${dis}></label>
+      <label style="grid-column:1/-1">Logins link <span class="muted" style="font-weight:400">— a link only, never a password</span>
+        <input id="c-logins" type="url" placeholder="Drive file or password-manager entry (https://…)"
+          value="${esc(c.logins_url || "")}" style="max-width:none" ${dis}></label>
       </div>
     </div>
     <div id="cd-glance"></div>
@@ -916,6 +934,20 @@ Views.renderClientDetail = async (view, id) => {
       saveChange(v ? "Drive folder linked" : "Drive folder link removed",
         () => Store.updateClient(id, { drive_folder_url: v || null }),
         () => Store.updateClient(id, { drive_folder_url: prev }),
+        reload);
+    };
+    $("#c-logins").onchange = (e) => {
+      const v = e.target.value.trim();
+      if (v && !isLoginsUrl(v)) {
+        // Whatever was typed may be a secret: clear it, never echo it back.
+        toast("Paste a link only: a Google Drive/Docs file or a password-manager entry (https://…)");
+        e.target.value = c.logins_url || "";
+        return;
+      }
+      const prev = c.logins_url;
+      saveChange(v ? "Logins link saved" : "Logins link removed",
+        () => Store.updateClient(id, { logins_url: v || null }),
+        () => Store.updateClient(id, { logins_url: prev }),
         reload);
     };
 
