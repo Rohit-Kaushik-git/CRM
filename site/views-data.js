@@ -845,7 +845,9 @@ async function docsTab() {
   rows.forEach((r) => r.t.sort((a, b) => String(b.transfer_date || "").localeCompare(String(a.transfer_date || ""))));
   const all = rows.concat(orphans);
 
-  const filled = (c) => c && c.by_type && Object.keys(c.by_type).length > 0;
+  // Counted by the v2 job: types present, or no documents at all (an empty
+  // breakdown is then the truth, not a row waiting for a refresh).
+  const filled = (c) => !!c && !!c.by_type && (Object.keys(c.by_type).length > 0 || !c.documents);
   // Not refreshed since v2 = unknown, not 0%: it sorts last, not first.
   const activeCov = (r) => r.c && filled(r.c) && r.c.active_employees ? (r.c.active_with_docs || 0) / r.c.active_employees : null;
   const mailTotal = (r) => r.t.reduce((a, t) => a + (Number(t.total_docs) || 0), 0);
@@ -960,7 +962,17 @@ function docGapsDrawer(c) {
   d.querySelector(".ld-x").onclick = close;
   d.querySelector(".ld-backdrop").onclick = close;
 
-  let emps = [], want = "none", q = "";
+  let emps = [], want = "none", q = "", working = "all";
+  // "Active" in Uzio only means no termination date. The last real punch is
+  // what says someone is actually driving this week.
+  const WORKING_DAYS = 14;
+  const sincePunch = (e) => e.lastPunch ? Math.floor((Date.now() - new Date(e.lastPunch + "T00:00:00")) / 86400000) : null;
+  const isWorking = (e) => { const d = sincePunch(e); return d !== null && d <= WORKING_DAYS; };
+  const punchCell = (e) => {
+    const d = sincePunch(e);
+    if (d === null) return `<span class="pill pill-onhold" title="No real punch on record">never</span>`;
+    return d <= WORKING_DAYS ? `${esc(e.lastPunch)}` : `<span class="pill pill-onhold" title="${d} days ago">${esc(e.lastPunch)}</span>`;
+  };
   const showLogin = (msg, typedUser) => {
     body.innerHTML = `<div class="card" style="box-shadow:none;background:var(--surface-cont-low)">
       <h2 style="margin-top:0">Sign in with your Uzio login</h2>
@@ -990,43 +1002,55 @@ function docGapsDrawer(c) {
     ["Handbook / policy", "Missing handbook / policy"], ["all", "Everyone"]];
   const pick = () => emps.filter((e) =>
     (want === "all" ? true : want === "none" ? !e.docs : !e.types.includes(want)) &&
+    (working === "all" || (working === "yes" ? isWorking(e) : !isWorking(e))) &&
     (!q || (e.name + " " + e.id).toLowerCase().includes(q)));
   const render = () => {
     const list = pick();
     const tick = (e, t) => e.types.includes(t) ? "✓" : `<span class="muted">—</span>`;
     body.querySelector("#dg-out").innerHTML = `<div style="max-height:58vh;overflow:auto;border:1px solid var(--line);border-radius:var(--r-md)">
-      <table class="grid" style="border:none"><thead><tr><th>Employee</th><th>ID</th><th>Hired</th><th>Files</th><th>W-4</th><th>I-9</th><th>Handbook</th><th>Has</th></tr></thead>
-      <tbody>${list.map((e) => `<tr><td><b>${esc(e.name)}</b></td><td>${esc(e.id)}</td><td>${esc(e.hired)}</td>
+      <table class="grid" style="border:none"><thead><tr><th>Employee</th><th>ID</th><th>Status</th><th>Hired</th><th>Last punch</th><th>Files</th><th>W-4</th><th>I-9</th><th>Handbook</th><th>Has</th></tr></thead>
+      <tbody>${list.map((e) => `<tr><td><b>${esc(e.name)}</b></td><td>${esc(e.id)}</td>
+        <td>${e.status === "Active" ? "Active" : `<span class="pill pill-na">${esc(e.status || "?")}</span>`}</td><td>${esc(e.hired)}</td><td>${punchCell(e)}</td>
         <td>${e.docs}</td><td>${tick(e, "Federal W-4")}</td><td>${tick(e, "I-9")}</td><td>${tick(e, "Handbook / policy")}</td>
         <td class="muted" style="font-size:12px">${esc(e.types.join(", "))}</td></tr>`).join("") ||
-        `<tr><td colspan="8" class="muted">Nobody — every active employee has it.</td></tr>`}</tbody></table></div>`;
+        `<tr><td colspan="10" class="muted">Nobody matches.</td></tr>`}</tbody></table></div>`;
     body.querySelector("#dg-n").textContent = `${list.length} of ${emps.length} active employees`;
   };
   const show = () => {
     const none = emps.filter((e) => !e.docs).length;
     const has = (t) => emps.filter((e) => e.types.includes(t)).length;
+    const work = emps.filter(isWorking).length, never = emps.filter((e) => !e.lastPunch).length;
+    const workNone = emps.filter((e) => isWorking(e) && !e.docs).length;
     body.innerHTML = `<div class="muted" style="font-size:12px;display:flex;gap:8px;align-items:center;margin-bottom:12px">
         Uzio: <b>${esc(ssGet(OPS_USER_KEY) || "")}</b>
         <button type="button" class="linkish" id="dg-out-btn" style="font-size:12px">Sign out of Uzio</button></div>
+      <p style="margin:0 0 10px;font-size:13px">"Active" = no termination date in Uzio. Of these <b>${emps.length}</b>,
+        <b>${work}</b> punched in the last ${WORKING_DAYS} days, <b>${emps.length - work - never}</b> not lately, and <b>${never}</b> never.</p>
       <div class="ld-cards" style="margin-bottom:12px">
-        <div class="ld-card ${none ? "ld-bad" : "ld-ok"}"><span class="ld-api">No documents</span><span><b>${none}</b> of ${emps.length}</span></div>
+        <div class="ld-card ${workNone ? "ld-bad" : "ld-ok"}"><span class="ld-api">Working, no documents</span><span><b>${workNone}</b> of ${work} working</span></div>
+        <div class="ld-card ${none ? "ld-bad" : "ld-ok"}"><span class="ld-api">No documents (all active)</span><span><b>${none}</b> of ${emps.length}</span></div>
         <div class="ld-card"><span class="ld-api">W-4</span><span><b>${has("Federal W-4")}</b> have it</span></div>
         <div class="ld-card"><span class="ld-api">I-9</span><span><b>${has("I-9")}</b> have it</span></div>
         <div class="ld-card"><span class="ld-api">Handbook / policy</span><span><b>${has("Handbook / policy")}</b> have it</span></div>
       </div>
       <div class="filter-bar" style="margin-bottom:10px">
         <select id="dg-want">${MISSING.map(([v, l]) => `<option value="${v}"${v === want ? " selected" : ""}>${l}</option>`).join("")}</select>
+        <select id="dg-work">
+          <option value="all"${working === "all" ? " selected" : ""}>Everyone active in Uzio</option>
+          <option value="yes"${working === "yes" ? " selected" : ""}>Working (punched in ${WORKING_DAYS} days)</option>
+          <option value="no"${working === "no" ? " selected" : ""}>Not punching lately / never</option></select>
         <input id="dg-q" type="search" placeholder="Filter by name or ID…">
         <button type="button" class="small secondary" id="dg-csv">Download CSV</button>
         <span class="muted" id="dg-n" style="margin-left:auto"></span></div>
       <div id="dg-out"></div>`;
     $("#dg-out-btn").onclick = () => { ssSet(OPS_TOKEN_KEY, null); showLogin(); };
     $("#dg-want").onchange = (e) => { want = e.target.value; render(); };
+    $("#dg-work").onchange = (e) => { working = e.target.value; render(); };
     $("#dg-q").oninput = (e) => { q = e.target.value.trim().toLowerCase(); render(); };
     $("#dg-csv").onclick = () => {
       const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-      const lines = [["Employee", "Employee ID", "Hired", "Files", "W-4", "I-9", "Handbook", "Document types"].join(",")]
-        .concat(pick().map((e) => [e.name, e.id, e.hired, e.docs, e.types.includes("Federal W-4") ? "Y" : "N",
+      const lines = [["Employee", "Employee ID", "Status", "Hired", "Last punch", "Files", "W-4", "I-9", "Handbook", "Document types"].join(",")]
+        .concat(pick().map((e) => [e.name, e.id, e.status, e.hired, e.lastPunch || "never", e.docs, e.types.includes("Federal W-4") ? "Y" : "N",
           e.types.includes("I-9") ? "Y" : "N", e.types.includes("Handbook / policy") ? "Y" : "N", e.types.join("; ")].map(cell).join(",")));
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
