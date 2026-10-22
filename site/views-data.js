@@ -784,22 +784,42 @@ async function coverageTab() {
   return render;
 }
 
-/* --- Documents: the transfer-mail record, and what prod actually holds.
-   The per-client ratio runs against ALL employees, not active — documents
-   cover leavers too, so an active-only ratio reads over 100% and means
-   nothing. --- */
+/* --- Documents: one row per client - what the transfer mail said, what Uzio
+   actually holds, and who is still missing what.
+   Coverage runs against ACTIVE employees (active_with_docs / active_employees,
+   both counted on the same "no termination date" rule, so it cannot pass
+   100%); leavers are shown apart, because a ratio over every employee ever
+   hired made a client with 1,600 ex-drivers look 10% done. Document TYPE
+   comes from the file name (docs.ts on the function side). --- */
+const DOC_TYPES_UI = ["Federal W-4", "State W-4", "I-9", "Direct deposit", "Handbook / policy",
+  "Offer letter", "ID / license", "Consent / disclosure", "Scanned image", "Other"];
+const DOC_KEY_TYPES = [["Federal W-4", "W-4"], ["I-9", "I-9"], ["Handbook / policy", "Handbook"]];
+const docNorm = (s) => String(s || "").toLowerCase().replace(/&/g, " and ")
+  .replace(/\b(llc|inc|corp|corporation|co|ltd|the)\b/g, " ").replace(/[^a-z0-9]/g, "");
+
+function docCovCell(n, of) {
+  if (!of) return `<span class="muted">—</span>`;
+  const p = Math.round((n / of) * 100);
+  const cls = p >= 90 ? "pill-done" : p >= 50 ? "pill-onhold" : "pill-cancelled";
+  return `<span class="pill ${cls}" title="${n} of ${of} active employees">${p}%</span>`;
+}
+
 async function docsTab() {
-  const [transfers, counts] = await Promise.all([
-    Store.listDocumentTransfers(), Store.listDocumentCounts()]);
+  const [transfers, counts, profiles] = await Promise.all([
+    Store.listDocumentTransfers(), Store.listDocumentCounts(),
+    Store.listClientProfiles().catch(() => [])]);
   const dft = { from: "", to: "" };   // transfer_date range
-  let tStatus = "", failedOnly = false;
+  let tStatus = "", failedOnly = false, view = "gaps";
   const tStatuses = [...new Set(transfers.map((r) => r.status).filter(Boolean))].sort();
-  $("#data-extra").innerHTML = `<select id="dt-status"><option value="">All transfer statuses</option>
+  $("#data-extra").innerHTML = `<select id="dt-view">
+      <option value="gaps">Biggest gaps first</option>
+      <option value="notstarted">Not started (no active employee has a document)</option>
+      <option value="mismatch">Mail and Uzio disagree</option>
+      <option value="all">All clients A-Z</option></select>
+    <select id="dt-status"><option value="">All transfer statuses</option>
       ${tStatuses.map((s) => `<option>${esc(s)}</option>`).join("")}</select>
     <label class="chk"><input type="checkbox" id="dt-failed"> Has failed docs</label>
     <span class="muted" style="font-size:12px">Transferred</span>${dfHtml("doct", dft)}`;
-  // Only the counted half: the transfer columns come from the completion
-  // mails, which no prod query can rebuild.
   $("#data-extra").appendChild(refreshControl(["document_counts", "push_to_crm"]));
   const pillCls = (s) => s === "Complete" ? "pill-done" : s === "Blocked" ? "pill-cancelled"
     : s === "In progress" ? "pill-progress" : s === "Nothing to transfer" ? "pill-na" : "pill-onhold";
@@ -809,49 +829,224 @@ async function docsTab() {
     "size limit: " + (r.fail_size_limit ?? 0),
     "resolved since: " + (r.failed_resolved ?? 0)].join("\n");
 
-  let pageT = 0, pageC = 0;
-  const render = () => {
-    const t = transfers.filter((r) =>
-      (!dataQ || r.client_name.toLowerCase().includes(dataQ)) &&
-      (!tStatus || r.status === tStatus) &&
-      (!failedOnly || r.failed_docs > 0) &&
-      dfPass(r.transfer_date, dft));
-    const c = counts.filter((r) =>
-      !dataQ || (r.company_name + " " + (r.dsp_short_code || "")).toLowerCase().includes(dataQ));
-    const pgT = pageSlice(t, pageT); pageT = pgT.p;
-    const pgC = pageSlice(c, pageC); pageC = pgC.p;
-    $("#data-body").innerHTML = `
-      <h2>Transfers (from the transfer mails)</h2>
-      <div style="overflow-x:auto"><table class="grid"><thead><tr>
-        <th>Client</th><th>Status</th><th>Date</th><th>Docs</th><th>Failed</th><th>Jira</th><th class="notes-cell">Notes</th>
-      </tr></thead><tbody>${pgT.rows.map((r) => `<tr>
-        <td><b>${esc(r.client_name)}</b></td>
-        <td>${dpill(r.status || "?", pillCls(r.status))}</td>
-        <td>${fmtDate(r.transfer_date)}</td>
-        <td>${r.total_docs ?? "—"}</td>
-        <td title="${esc(failTitle(r))}">${r.failed_docs ? `<span class="overdue">${r.failed_docs}</span>` : "0"}</td>
-        <td>${esc(r.jira_id || "—")}</td>
-        <td class="notes-cell"><span class="note">${esc(r.notes || "")}</span></td></tr>`).join("") ||
-      `<tr><td colspan="7" class="muted">No clients match.</td></tr>`}</tbody></table></div>` +
-      pagerHtml("doct", pgT.p, pgT.pages, t.length) + `
-      <h2>In the database (per client)</h2>
-      <div style="overflow-x:auto"><table class="grid"><thead><tr>
-        <th>Client</th><th>Documents</th><th>Employees with docs</th>
-      </tr></thead><tbody>${pgC.rows.map((r) => `<tr>
-        <td><b>${esc(r.company_name)}</b><div class="muted" style="font-size:11px">${esc(r.dsp_short_code || "")}</div></td>
-        <td>${r.documents ?? 0}</td>
-        <td>${r.employees_with_docs ?? 0} of ${r.total_employees ?? "?"} employees ${dbar(dpct(r.employees_with_docs, r.total_employees))}</td></tr>`).join("") ||
-      `<tr><td colspan="3" class="muted">No clients match.</td></tr>`}</tbody></table></div>` +
-      pagerHtml("docc", pgC.p, pgC.pages, c.length);
-    hookPager("doct", (d) => { pageT += d; render(); });
-    hookPager("docc", (d) => { pageC += d; render(); });
-    $("#data-count").textContent = `${t.length} transfers · ${c.length} clients counted`;
+  /* One row per client: counts are keyed by short code, the mails only carry
+     a name - matched on the normalised name, the profile's DSP name as an
+     alias, prefix either way. A mail nobody matches still gets its own row. */
+  const aliases = {};
+  profiles.forEach((p) => { if (p.dsp_short_code && p.dsp_name) aliases[p.dsp_short_code] = docNorm(p.dsp_name); });
+  const rows = counts.map((c) => ({ c, t: [], keys: [docNorm(c.company_name), aliases[c.dsp_short_code]].filter(Boolean) }));
+  const orphans = [];
+  transfers.forEach((t) => {
+    const n = docNorm(t.client_name);
+    const hit = rows.find((r) => r.keys.some((k) => k === n)) ||
+      rows.find((r) => r.keys.some((k) => n.length > 4 && k.length > 4 && (k.startsWith(n) || n.startsWith(k))));
+    hit ? hit.t.push(t) : orphans.push({ c: null, t: [t], keys: [n] });
+  });
+  rows.forEach((r) => r.t.sort((a, b) => String(b.transfer_date || "").localeCompare(String(a.transfer_date || ""))));
+  const all = rows.concat(orphans);
+
+  const filled = (c) => c && c.by_type && Object.keys(c.by_type).length > 0;
+  // Not refreshed since v2 = unknown, not 0%: it sorts last, not first.
+  const activeCov = (r) => r.c && filled(r.c) && r.c.active_employees ? (r.c.active_with_docs || 0) / r.c.active_employees : null;
+  const mailTotal = (r) => r.t.reduce((a, t) => a + (Number(t.total_docs) || 0), 0);
+  const mismatch = (r) => {
+    if (!r.c || !r.t.length || !filled(r.c)) return null;
+    const said = mailTotal(r), have = r.c.migrated_docs || 0;
+    if (!said) return null;
+    return Math.abs(said - have) > Math.max(5, said * 0.02) ? { said, have } : null;
   };
-  render.reset = () => { pageT = 0; pageC = 0; };
-  wireDateFilter("doct", dft, () => { pageT = 0; render(); });
-  $("#dt-status").onchange = (e) => { tStatus = e.target.value; pageT = 0; render(); };
-  $("#dt-failed").onchange = (e) => { failedOnly = e.target.checked; pageT = 0; render(); };
+
+  let page = 0;
+  const open = new Set();
+  const render = () => {
+    let list = all.filter((r) => {
+      const name = (r.c ? r.c.company_name + " " + (r.c.dsp_short_code || "") : r.t[0].client_name).toLowerCase();
+      if (dataQ && !name.includes(dataQ)) return false;
+      if (tStatus && !r.t.some((t) => t.status === tStatus)) return false;
+      if (failedOnly && !r.t.some((t) => t.failed_docs > 0)) return false;
+      if ((dft.from || dft.to) && !r.t.some((t) => dfPass(t.transfer_date, dft))) return false;
+      if (view === "notstarted") return r.c && r.c.active_employees > 0 && filled(r.c) && !r.c.active_with_docs;
+      if (view === "mismatch") return !!mismatch(r);
+      return true;
+    });
+    const nameOf = (r) => (r.c ? r.c.company_name : r.t[0].client_name) || "";
+    list = view === "all"
+      ? list.sort((a, b) => nameOf(a).localeCompare(nameOf(b)))
+      : list.sort((a, b) => (activeCov(a) ?? 2) - (activeCov(b) ?? 2) || nameOf(a).localeCompare(nameOf(b)));
+    const pg = pageSlice(list, page); page = pg.p;
+
+    const row = (r) => {
+      const c = r.c, t = r.t[0], key = c ? c.dsp_short_code : "t:" + t.client_name;
+      const mm = mismatch(r);
+      const mail = t
+        ? `${dpill(t.status || "?", pillCls(t.status))}<div class="muted" style="font-size:11px">${fmtDate(t.transfer_date)}${t.total_docs != null ? ` · sent ${t.total_docs}` : ""}${t.failed_docs ? ` · <span class="overdue" title="${esc(failTitle(t))}">${t.failed_docs} failed</span>` : ""}${r.t.length > 1 ? ` · +${r.t.length - 1} more` : ""}</div>`
+        : `<span class="muted">No transfer mail</span>`;
+      if (!c) {
+        return `<tr><td><b>${esc(t.client_name)}</b><div class="muted" style="font-size:11px">not matched to a counted client</div></td>
+          <td>${mail}</td><td colspan="7" class="muted">Uzio has no count for this name — check the client's FEIN on the tracker.</td></tr>`;
+      }
+      const leavers = (c.total_employees || 0) - (c.active_employees || 0);
+      const later = (c.documents || 0) - (c.migrated_docs || 0);
+      const types = filled(c)
+        ? DOC_KEY_TYPES.map(([k]) => `<td>${docCovCell((c.by_type[k] || {}).active || 0, c.active_employees)}</td>`).join("")
+        : `<td colspan="3" class="muted" style="font-size:12px">Refresh from Uzio to fill</td>`;
+      const detail = open.has(key) && filled(c) ? `<tr class="dt-detail"><td colspan="9">
+          <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">
+          <table class="grid" style="width:auto"><thead><tr><th>Type</th><th>Files</th><th>Active employees with it</th></tr></thead><tbody>
+          ${DOC_TYPES_UI.filter((k) => c.by_type[k]).map((k) => `<tr><td>${esc(k)}</td><td>${c.by_type[k].docs}</td>
+            <td>${c.by_type[k].active} of ${c.active_employees || 0} ${docCovCell(c.by_type[k].active, c.active_employees)}</td></tr>`).join("")}
+          </tbody></table>
+          <div style="font-size:13px;line-height:1.8">
+            <div><span class="muted">Migrated by UZIO</span> <b>${c.migrated_docs || 0}</b>${c.first_migrated ? ` <span class="muted">(${fmtDate(c.first_migrated)} → ${fmtDate(c.last_migrated)})</span>` : ""}</div>
+            <div><span class="muted">Uploaded later by employees/employer</span> <b>${later}</b></div>
+            <div><span class="muted">Last upload</span> ${fmtDate(c.last_upload)}</div>
+            ${mm ? `<div class="overdue">Mail said ${mm.said} sent; Uzio holds ${mm.have} migrated files (${mm.have - mm.said > 0 ? "+" : ""}${mm.have - mm.said}).</div>` : ""}
+            <div class="muted">Checked ${fmtDate(String(c.checked_at || "").slice(0, 10))}</div>
+          </div></div></td></tr>` : "";
+      return `<tr class="rowlink" data-open="${esc(key)}">
+        <td><b>${esc(c.company_name)}</b><div class="muted" style="font-size:11px">${esc(c.dsp_short_code || "")}</div></td>
+        <td>${mail}</td>
+        <td>${c.documents || 0}${mm ? ` <span class="pill pill-onhold" title="Mail said ${mm.said}, Uzio holds ${mm.have} migrated files">mail ≠ Uzio</span>` : ""}
+          ${filled(c) ? `<div class="muted" style="font-size:11px">${c.migrated_docs || 0} migrated · ${later} later</div>` : ""}</td>
+        <td>${filled(c) ? `${c.active_with_docs || 0} of ${c.active_employees || 0} ${dbar(dpct(c.active_with_docs || 0, c.active_employees))}` : `<span class="muted">${c.employees_with_docs || 0} of ${c.total_employees || "?"} (all-time)</span>`}</td>
+        <td>${filled(c) && leavers > 0 ? `<span class="muted">${c.terminated_with_docs || 0} of ${leavers}</span>` : `<span class="muted">—</span>`}</td>
+        ${types}
+        <td>${c.fein && c.active_employees ? `<button type="button" class="small secondary" data-gaps="${esc(c.dsp_short_code)}">Gaps</button>` : ""}</td></tr>${detail}`;
+    };
+
+    $("#data-body").innerHTML = `<div style="overflow-x:auto"><table class="grid"><thead><tr>
+        <th>Client</th><th>Transfer mail</th><th>Files in Uzio</th><th>Active employees with any doc</th><th>Leavers with docs</th>
+        ${DOC_KEY_TYPES.map(([, l]) => `<th title="Active employees holding at least one">${l}</th>`).join("")}<th></th>
+      </tr></thead><tbody>${pg.rows.map(row).join("") || `<tr><td colspan="9" class="muted">No clients match.</td></tr>`}</tbody></table></div>` +
+      pagerHtml("docc", pg.p, pg.pages, list.length) +
+      `<p class="muted" style="font-size:12px">Coverage counts ACTIVE employees only. Type comes from the file name (W-4 = "fw4", I-9 = "formi9"...); a file named something else lands in Other. Click a row for the full breakdown.</p>`;
+    hookPager("docc", (d) => { page += d; render(); });
+    $("#data-body").querySelectorAll("[data-open]").forEach((tr) => (tr.onclick = (e) => {
+      if (e.target.closest("button")) return;
+      const k = tr.dataset.open; open.has(k) ? open.delete(k) : open.add(k); render();
+    }));
+    $("#data-body").querySelectorAll("[data-gaps]").forEach((b) => (b.onclick = () => {
+      const c = counts.find((x) => x.dsp_short_code === b.dataset.gaps);
+      if (c) docGapsDrawer(c);
+    }));
+    const started = counts.filter((c) => c.active_with_docs > 0).length;
+    $("#data-count").textContent = `${list.length} clients · ${started} with documents for active employees`;
+  };
+  render.reset = () => { page = 0; };
+  wireDateFilter("doct", dft, () => { page = 0; render(); });
+  $("#dt-view").onchange = (e) => { view = e.target.value; page = 0; render(); };
+  $("#dt-status").onchange = (e) => { tStatus = e.target.value; page = 0; render(); };
+  $("#dt-failed").onchange = (e) => { failedOnly = e.target.checked; page = 0; render(); };
   return render;
+}
+
+/* Who is missing what, for one client: every ACTIVE employee and the document
+   types they hold. Names leave prod here, so the read runs under the viewer's
+   own Uzio (NeuronOps) login, like the change report. */
+function docGapsDrawer(c) {
+  document.getElementById("log-drawer")?.remove();
+  const d = document.createElement("div");
+  d.id = "log-drawer";
+  d.innerHTML = `<div class="ld-backdrop"></div><aside class="ld-panel" role="dialog" aria-label="Document gaps">
+    <div class="ld-head"><div><h2 style="margin:0">Document gaps</h2>
+      <span class="muted" style="font-size:12px">${esc(c.company_name)} · FEIN ${esc(c.fein)} · active employees</span></div>
+      <button type="button" class="linkish ld-x" aria-label="Close">✕</button></div>
+    <div class="ld-body"></div></aside>`;
+  document.body.appendChild(d);
+  const body = d.querySelector(".ld-body");
+  const close = () => { d.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  d.querySelector(".ld-x").onclick = close;
+  d.querySelector(".ld-backdrop").onclick = close;
+
+  let emps = [], want = "none", q = "";
+  const showLogin = (msg, typedUser) => {
+    body.innerHTML = `<div class="card" style="box-shadow:none;background:var(--surface-cont-low)">
+      <h2 style="margin-top:0">Sign in with your Uzio login</h2>
+      <p class="muted" style="font-size:13px;margin-top:0">Employee names come from prod, so the read runs under your own
+        Uzio account and is audited to you. The password is not stored; the session ends when you close this tab.</p>
+      ${msg ? `<p class="overdue" style="font-size:13px">${esc(msg)}</p>` : ""}
+      <form id="dg-login" style="display:flex;flex-direction:column;gap:10px">
+        <input id="dg-u" type="email" autocomplete="username" placeholder="firstname.lastname@uzio.com" required style="max-width:none">
+        <input id="dg-p" type="password" autocomplete="current-password" placeholder="Uzio password" required style="max-width:none">
+        <button type="submit">Sign in</button></form></div>`;
+    $("#dg-u").value = typedUser || ssGet(OPS_USER_KEY) || ssGet(OB_USER_KEY) || "";
+    ($("#dg-u").value ? $("#dg-p") : $("#dg-u")).focus();
+    $("#dg-login").onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = e.target.querySelector("button"); btn.disabled = true; btn.textContent = "Signing in…";
+      const pw = $("#dg-p"); const password = pw.value; pw.value = "";
+      const username = $("#dg-u").value.trim();
+      try {
+        const out = await callProdFn({ action: "ops_login", username, password });
+        ssSet(OPS_TOKEN_KEY, out.token); ssSet(OPS_USER_KEY, out.user);
+        load();
+      } catch (err) { showLogin(err.message, username); }
+    };
+  };
+
+  const MISSING = [["none", "No documents at all"], ["Federal W-4", "Missing W-4"], ["I-9", "Missing I-9"],
+    ["Handbook / policy", "Missing handbook / policy"], ["all", "Everyone"]];
+  const pick = () => emps.filter((e) =>
+    (want === "all" ? true : want === "none" ? !e.docs : !e.types.includes(want)) &&
+    (!q || (e.name + " " + e.id).toLowerCase().includes(q)));
+  const render = () => {
+    const list = pick();
+    const tick = (e, t) => e.types.includes(t) ? "✓" : `<span class="muted">—</span>`;
+    body.querySelector("#dg-out").innerHTML = `<div style="max-height:58vh;overflow:auto;border:1px solid var(--line);border-radius:var(--r-md)">
+      <table class="grid" style="border:none"><thead><tr><th>Employee</th><th>ID</th><th>Hired</th><th>Files</th><th>W-4</th><th>I-9</th><th>Handbook</th><th>Has</th></tr></thead>
+      <tbody>${list.map((e) => `<tr><td><b>${esc(e.name)}</b></td><td>${esc(e.id)}</td><td>${esc(e.hired)}</td>
+        <td>${e.docs}</td><td>${tick(e, "Federal W-4")}</td><td>${tick(e, "I-9")}</td><td>${tick(e, "Handbook / policy")}</td>
+        <td class="muted" style="font-size:12px">${esc(e.types.join(", "))}</td></tr>`).join("") ||
+        `<tr><td colspan="8" class="muted">Nobody — every active employee has it.</td></tr>`}</tbody></table></div>`;
+    body.querySelector("#dg-n").textContent = `${list.length} of ${emps.length} active employees`;
+  };
+  const show = () => {
+    const none = emps.filter((e) => !e.docs).length;
+    const has = (t) => emps.filter((e) => e.types.includes(t)).length;
+    body.innerHTML = `<div class="muted" style="font-size:12px;display:flex;gap:8px;align-items:center;margin-bottom:12px">
+        Uzio: <b>${esc(ssGet(OPS_USER_KEY) || "")}</b>
+        <button type="button" class="linkish" id="dg-out-btn" style="font-size:12px">Sign out of Uzio</button></div>
+      <div class="ld-cards" style="margin-bottom:12px">
+        <div class="ld-card ${none ? "ld-bad" : "ld-ok"}"><span class="ld-api">No documents</span><span><b>${none}</b> of ${emps.length}</span></div>
+        <div class="ld-card"><span class="ld-api">W-4</span><span><b>${has("Federal W-4")}</b> have it</span></div>
+        <div class="ld-card"><span class="ld-api">I-9</span><span><b>${has("I-9")}</b> have it</span></div>
+        <div class="ld-card"><span class="ld-api">Handbook / policy</span><span><b>${has("Handbook / policy")}</b> have it</span></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:10px">
+        <select id="dg-want">${MISSING.map(([v, l]) => `<option value="${v}"${v === want ? " selected" : ""}>${l}</option>`).join("")}</select>
+        <input id="dg-q" type="search" placeholder="Filter by name or ID…">
+        <button type="button" class="small secondary" id="dg-csv">Download CSV</button>
+        <span class="muted" id="dg-n" style="margin-left:auto"></span></div>
+      <div id="dg-out"></div>`;
+    $("#dg-out-btn").onclick = () => { ssSet(OPS_TOKEN_KEY, null); showLogin(); };
+    $("#dg-want").onchange = (e) => { want = e.target.value; render(); };
+    $("#dg-q").oninput = (e) => { q = e.target.value.trim().toLowerCase(); render(); };
+    $("#dg-csv").onclick = () => {
+      const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+      const lines = [["Employee", "Employee ID", "Hired", "Files", "W-4", "I-9", "Handbook", "Document types"].join(",")]
+        .concat(pick().map((e) => [e.name, e.id, e.hired, e.docs, e.types.includes("Federal W-4") ? "Y" : "N",
+          e.types.includes("I-9") ? "Y" : "N", e.types.includes("Handbook / policy") ? "Y" : "N", e.types.join("; ")].map(cell).join(",")));
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
+      a.download = `${String(c.company_name).replace(/[^\w]+/g, "_")}_document_gaps.csv`;
+      a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    };
+    render();
+  };
+  const load = async () => {
+    body.innerHTML = `<p class="muted">Reading ${esc(c.company_name)}'s employees and documents…</p>`;
+    try {
+      const out = await callProdFn({ action: "doc_gaps", fein: c.fein, opsToken: ssGet(OPS_TOKEN_KEY) });
+      emps = out.employees || [];
+      show();
+    } catch (e) {
+      if (e.needLogin) return showLogin(e.message);
+      body.innerHTML = `<p class="overdue">${esc(e.message)}</p>`;
+    }
+  };
+  ssGet(OPS_TOKEN_KEY) ? load() : showLogin();
 }
 
 /* --- EWA: which earned-wage-access provider each live DSP is wired to
@@ -1196,7 +1391,9 @@ async function loadPlatformPanel(c) {
       b.health ? stat("#data/health", "Payroll health",
         dpill(b.health.status || "?", b.health.status === "Covered" ? "pill-done" : b.health.status === "New to platform" ? "pill-na" : "pill-cancelled")) : "",
       b.docs ? stat("#data/docs", "Documents",
-        `${b.docs.documents ?? 0} · ${dpct(b.docs.employees_with_docs, b.docs.total_employees) ?? "?"}% employees`) : "",
+        b.docs.by_type && Object.keys(b.docs.by_type).length
+          ? `${dpct(b.docs.active_with_docs || 0, b.docs.active_employees) ?? "?"}% active · W-4 ${dpct((b.docs.by_type["Federal W-4"] || {}).active || 0, b.docs.active_employees) ?? "?"}%`
+          : `${b.docs.documents ?? 0} · ${dpct(b.docs.employees_with_docs, b.docs.total_employees) ?? "?"}% employees`) : "",
       b.api && b.api.length ? stat("#data/api", "APIs", `${okCount}/${API_MODULES.length} ✓`) : "",
       s && s.pr_normal_runs != null ? `<span><span class="muted">Pay runs</span>&nbsp;<b>${s.pr_normal_runs}</b></span>` : "",
     ].filter(Boolean);
