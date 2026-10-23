@@ -1033,7 +1033,7 @@ Views.renderOpenItems = async (view) => {
 Views.renderTeam = async (view) => {
   const [users, adminEmails] = await Promise.all([Store.listUsers(), Store.getAdminEmails()]);
   view.innerHTML = `<div class="page-head"><h1>Team</h1></div>
-    <p class="muted">Accounts are created by signing up on the login page with an @uzio.com email.
+    <p class="muted">Public sign-up is off. Add a new @uzio.com account in Supabase → Authentication → Users → Add user; it appears here as an implementor.
        Admins are whoever is on the admin list (stored in app_config).</p>
     <table class="grid"><thead><tr>
       <th>Name</th><th>Email</th><th>Role</th><th>Active</th><th></th></tr></thead><tbody>

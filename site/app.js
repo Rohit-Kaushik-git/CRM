@@ -147,29 +147,10 @@ function showApp(me) {
 }
 
 function wireLogin() {
-  let mode = "signin";
-  const setMode = (m) => {
-    mode = m;
-    $("#f-name").style.display = m === "signup" ? "block" : "none";
-    $("#f-password2").style.display = m === "signup" ? "block" : "none";
-    $("#f-password2").required = m === "signup";
-    $("#login-submit").textContent = m === "signup" ? "Sign up" : "Sign in";
-    $("#tab-signin").classList.toggle("active", m === "signin");
-    $("#tab-signup").classList.toggle("active", m === "signup");
-  };
-  $("#tab-signin").onclick = () => setMode("signin");
-  $("#tab-signup").onclick = () => setMode("signup");
   $("#login-form").onsubmit = (e) => {
     e.preventDefault();
     guard(async () => {
-      const email = $("#f-email").value, pw = $("#f-password").value;
-      if (mode === "signup") {
-        if (pw !== $("#f-password2").value) { toast("Passwords don't match"); return; }
-        await Store.signUp($("#f-name").value.trim(), email, pw);
-        await Store.signIn(email, pw);
-      } else {
-        await Store.signIn(email, pw);
-      }
+      await Store.signIn($("#f-email").value, $("#f-password").value);
       const me = await Store.loadMe();
       if (me) { location.hash = ""; showApp(me); }
     });
